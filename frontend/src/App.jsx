@@ -11,7 +11,7 @@ function App() {
   const [error, setError] = useState(null);
 
   // Backend API URL (Make sure your Node.js backend is running at this address)
-  const API_URL = 'http://localhost:3001/api/process-text';
+  const API_URL = 'https://japanese-reader-backend.onrender.com/api/process-text';
 
   // Function to handle the API call
   const handleProcessText = async () => {
