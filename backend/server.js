@@ -4,6 +4,28 @@ require('dotenv').config(); // For loading GEMINI_API_KEY locally
 const express = require('express');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const cors = require('cors'); // Require CORS package
+const { Pool } = require('pg');
+
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  // Add SSL configuration if required by Render's internal connection (often needed)
+  // Check Render's DB connection details page for SSL requirements.
+  // ssl: {
+  //   rejectUnauthorized: false // Adjust as per Render's instructions, might need true or specific certs
+  // }
+});
+
+pool.query('SELECT NOW()', (err, res) => {
+  if (err) {
+    console.error('❌ Database connection error:', err.stack);
+  } else {
+    console.log('✅ Database connection successful. Current time:', res.rows[0].now);
+  }
+  // Optionally, you could close the pool if just testing, but typically keep it open
+  // pool.end();
+});
+
 
 // --- Initialize Gemini Client ---
 const apiKey = process.env.GEMINI_API_KEY;
@@ -114,3 +136,5 @@ app.listen(port, () => {
   // Log the actual port the server is listening on
   console.log(`✨ Backend server is running on port ${port}`);
 });
+
+
