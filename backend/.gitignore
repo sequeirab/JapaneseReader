@@ -1,0 +1,11 @@
+# Ignore Node.js dependencies folder
+node_modules/
+
+# Ignore environment variables file
+.env
+
+# Ignore macOS system files
+.DS_Store
+
+# Ignore Windows thumbnail cache files
+Thumbs.db
