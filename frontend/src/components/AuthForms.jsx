@@ -10,7 +10,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001
 // --- Google Auth API Call Function ---
 // Moved implementation here for simplicity, could be in a service file
 async function apiGoogleLogin(googleTokenCredential) {
-  console.log("Sending Google ID Token to backend:", googleTokenCredential);
+  
   const response = await fetch(API_BASE_URL + '/auth/google', { // Calls the backend endpoint
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -26,7 +26,7 @@ async function apiGoogleLogin(googleTokenCredential) {
 
   // Expecting { token: 'app-jwt', user: { userId, email } } from backend
   if (data && data.token && data.user) {
-    console.log("Google Backend Auth success:", data.user.email);
+    
     return { token: data.token, user: data.user };
   } else {
     console.error("Google Backend Auth response missing token or user:", data);
