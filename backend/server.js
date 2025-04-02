@@ -9,6 +9,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const { OAuth2Client } = require('google-auth-library');
 
 // --- Initialize DB Pool ---
 const pool = new Pool({
@@ -34,6 +35,13 @@ try {
     console.error("Error initializing Gemini client:", initError.message);
     model = null;
 }
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID; // Get client ID from env vars
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+if (!GOOGLE_CLIENT_ID) {
+    console.error("FATAL ERROR: GOOGLE_CLIENT_ID environment variable is not set.");
+}
+
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -234,6 +242,110 @@ app.post('/auth/login', async (req, res) => {
   }
 });
 
+app.post('/auth/google', async (req, res) => {
+  const { googleToken } = req.body; // Expecting { "googleToken": "ID_TOKEN_FROM_FRONTEND" }
+
+  if (!googleToken) {
+      return res.status(400).json({ error: "Google ID token is required." });
+  }
+  if (!GOOGLE_CLIENT_ID) {
+      console.error("Google Client ID not configured on backend.");
+      return res.status(500).json({ error: "Server configuration error." });
+  }
+  // Get JWT secret from environment variables for signing OUR token
+  const jwtSecret = process.env.JWT_SECRET;
+   if (!jwtSecret) {
+       console.error("FATAL ERROR: JWT_SECRET environment variable is not set.");
+       return res.status(500).json({ error: "Server configuration error." });
+   }
+
+  try {
+      // Verify the Google ID token
+      const ticket = await googleClient.verifyIdToken({
+          idToken: googleToken,
+          audience: GOOGLE_CLIENT_ID, // Specify the CLIENT_ID of the app that accesses the backend
+      });
+      const payload = ticket.getPayload();
+
+      // Extract user info from verified token
+      const googleId = payload['sub'];
+      const email = payload['email'];
+      const emailVerified = payload['email_verified'];
+      // const name = payload['name']; // Optional
+      // const picture = payload['picture']; // Optional
+
+      if (!email || !emailVerified) {
+          // Don't allow login if email isn't verified by Google
+          return res.status(400).json({ error: "Google account email not verified." });
+      }
+
+      let user;
+      let userId;
+
+      // Check if user exists by Google ID
+      const findByGoogleIdQuery = 'SELECT user_id, email FROM users WHERE google_id = $1';
+      let result = await pool.query(findByGoogleIdQuery, [googleId]);
+      user = result.rows[0];
+
+      if (user) {
+          // User found by Google ID - proceed to login
+          userId = user.user_id;
+          console.log('Google Sign-In: User found by Google ID:', user.email);
+      } else {
+          // User not found by Google ID, check by email
+          const findByEmailQuery = 'SELECT user_id, email, google_id FROM users WHERE email = $1';
+          result = await pool.query(findByEmailQuery, [email.toLowerCase()]);
+          user = result.rows[0];
+
+          if (user) {
+              // User found by email - link Google ID if not already linked
+              userId = user.user_id;
+              if (!user.google_id) {
+                  console.log('Google Sign-In: Found user by email, linking Google ID:', user.email);
+                  const linkGoogleIdQuery = 'UPDATE users SET google_id = $1 WHERE user_id = $2';
+                  await pool.query(linkGoogleIdQuery, [googleId, userId]);
+              } else {
+                  console.log('Google Sign-In: User found by email (Google ID already linked):', user.email);
+                  // Optional: Check if stored google_id matches current googleId - security measure
+                  if (user.google_id !== googleId) {
+                      console.error(`Security Alert: Email ${email} trying to log in with different Google ID.`);
+                      return res.status(403).json({ error: "Account association mismatch." });
+                  }
+              }
+          } else {
+              // User not found by email either - create new user
+              console.log('Google Sign-In: Creating new user for email:', email);
+              // NOTE: No password hash needed for Google sign-in users
+              const createUserQuery = 'INSERT INTO users (email, google_id) VALUES ($1, $2) RETURNING user_id, email';
+              const values = [email.toLowerCase(), googleId];
+              result = await pool.query(createUserQuery, values);
+              user = result.rows[0];
+              userId = user.user_id;
+              console.log('Google Sign-In: New user created:', user.email);
+          }
+      }
+
+      // --- Generate Application JWT ---
+      const appPayload = { userId: userId, email: user.email };
+      const appToken = jwt.sign(appPayload, jwtSecret, { expiresIn: '1h' });
+
+      // Send back the application token and user info
+      res.status(200).json({
+          message: 'Google Sign-In successful!',
+          token: appToken, // Your application's token
+          user: { userId: userId, email: user.email }
+      });
+
+  } catch (error) {
+      console.error('Google Sign-In Error:', error);
+      // Handle specific errors from verifyIdToken if needed
+      if (error.message.includes("Token used too late") || error.message.includes("Invalid token signature")) {
+           res.status(401).json({ error: 'Invalid or expired Google token.' });
+      } else {
+           res.status(500).json({ error: 'Google Sign-In failed.' });
+      }
+  }
+});
 
 // --- Start the Server ---
 app.listen(port, () => {
