@@ -2,54 +2,83 @@
 import React from 'react';
 import LoginForm from './LoginForm';
 import RegisterForm from './RegisterForm';
-import { GoogleLogin } from '@react-oauth/google'; // Import GoogleLogin
+import { GoogleLogin } from '@react-oauth/google';
 
-// Placeholder function for handling Google token (will call backend later)
+// --- Configuration --- (Get API Base URL - could also pass down from App)
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+
+// --- Google Auth API Call Function ---
+// Moved implementation here for simplicity, could be in a service file
 async function apiGoogleLogin(googleTokenCredential) {
-    console.log("Received Google ID Token:", googleTokenCredential);
-    // TODO: Send this token to a new backend endpoint (e.g., POST /auth/google)
-    // const response = await fetch(API_BASE_URL + '/auth/google', { method: 'POST', ... body: { token: googleTokenCredential }});
-    // Handle response, return { user, token } or throw error
-    alert('Google Sign-In frontend successful! Backend logic not implemented yet.');
-    // For now, return mock success to test UI flow
-    // In real implementation, backend would return { user, token }
-    // return { token: 'mock-app-jwt-from-google', user: { email: 'google.user@example.com', userId: 'google123' } };
-    return null; // Indicate backend part not ready yet
+  console.log("Sending Google ID Token to backend:", googleTokenCredential);
+  const response = await fetch(API_BASE_URL + '/auth/google', { // Calls the backend endpoint
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ googleToken: googleTokenCredential }), // Send token in correct format
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    console.error("Google Backend Auth failed:", data);
+    throw new Error(data.error || `HTTP error! Status: ${response.status}`);
+  }
+
+  // Expecting { token: 'app-jwt', user: { userId, email } } from backend
+  if (data && data.token && data.user) {
+    console.log("Google Backend Auth success:", data.user.email);
+    return { token: data.token, user: data.user };
+  } else {
+    console.error("Google Backend Auth response missing token or user:", data);
+    throw new Error("Authentication successful, but received unexpected data from server.");
+  }
 }
 
 
-function AuthForms({ showLogin, setShowLogin, handleLogin, handleRegister, authError, isLoading }) {
+// --- AuthForms Component ---
+// Now receives state setters as props from App
+function AuthForms({
+    showLogin, setShowLogin,
+    handleLogin, handleRegister, authError, isLoading,
+    setAuthToken, setCurrentUser, setAuthError, setIsAuthLoading // New props from App
+ }) {
 
   // Handler for successful Google login on the frontend
   const handleGoogleSuccess = async (credentialResponse) => {
-    // credentialResponse contains the Google ID token in credentialResponse.credential
     if (credentialResponse.credential) {
-        try {
-            // Call placeholder API function to handle the token
-            const result = await apiGoogleLogin(credentialResponse.credential);
+      setAuthError(''); // Clear previous errors
+      setIsAuthLoading(true); // Set loading state via prop function
+      try {
+        // Call the *real* API function to verify token with backend
+        const result = await apiGoogleLogin(credentialResponse.credential);
 
-            if (result && result.token && result.user) {
-                localStorage.setItem('authToken', result.token);
-                // Need a way to update App's state (pass down setters or use Context)
-                // setAuthToken(result.token); // Can't call App's setter directly
-                console.log("Google login successful, need to update App state");
-             }
-        } catch (error) {
-            console.error("Google Sign-In Error:", error);
-            // Need a way to show error (pass down setter or use Context)
-            // setAuthError(error.message || 'Google Sign-In failed.');
-            alert(`Google Sign-In Error: ${error.message || 'Unknown error'}`);
+        // If backend verification succeeds and returns app token/user
+        if (result && result.token && result.user) {
+            localStorage.setItem('authToken', result.token); // Store app token
+            // Update App's state using functions passed as props
+            setAuthToken(result.token);
+            setCurrentUser(result.user);
+        } else {
+             // Should be caught by errors thrown in apiGoogleLogin
+             setAuthError('Google Sign-In successful, but failed to log into application.');
         }
+      } catch (error) {
+          console.error("Google Sign-In Error:", error);
+          // Set App's error state using function passed as prop
+          setAuthError(error.message || 'Google Sign-In failed.');
+      } finally {
+          setIsAuthLoading(false); // Clear loading state via prop function
+      }
     } else {
         console.error("Google Sign-In failed: No credential received.");
-        alert('Google Sign-In failed: No credential received.');
+        setAuthError('Google Sign-In failed: No credential received.');
     }
   };
 
+  // onError handler remains the same
   const handleGoogleError = () => {
     console.error('Google Sign-In failed');
-    alert('Google Sign-In failed. Please try again.');
-    // Optionally set an error state
+    setAuthError('Google Sign-In failed. Please try again.'); // Use prop function
   };
 
 
@@ -69,13 +98,13 @@ function AuthForms({ showLogin, setShowLogin, handleLogin, handleRegister, authE
 
       {/* Google Login Button */}
       <div className="flex justify-center">
-         {/* Render the GoogleLogin component */}
          <GoogleLogin
              onSuccess={handleGoogleSuccess}
              onError={handleGoogleError}
-             useOneTap // Optional: Enables One Tap sign-in prompt
+             // useOneTap // Optional
              theme="outline"
              size="large"
+             disabled={isLoading} // Disable while auth is loading
          />
       </div>
 

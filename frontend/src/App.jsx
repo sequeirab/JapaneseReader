@@ -4,6 +4,7 @@ import Header from './components/Header';
 import TextInput from './components/TextInput';
 import OutputDisplay from './components/OutputDisplay';
 import AuthForms from './components/AuthForms';
+
 // Removed direct imports for LoginForm/RegisterForm as they are now used within AuthForms
 
 // --- Configuration ---
@@ -200,6 +201,10 @@ function App() {
           handleRegister={handleRegister}
           authError={authError}
           isLoading={isAuthLoading}
+          setAuthToken={setAuthToken}
+          setCurrentUser={setCurrentUser}
+          setAuthError={setAuthError}
+          setIsAuthLoading={setIsAuthLoading}
         />
       )}
 
