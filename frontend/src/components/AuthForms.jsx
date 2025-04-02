@@ -28,14 +28,12 @@ function AuthForms({ showLogin, setShowLogin, handleLogin, handleRegister, authE
             // Call placeholder API function to handle the token
             const result = await apiGoogleLogin(credentialResponse.credential);
 
-            // TODO: Once apiGoogleLogin is implemented to call the backend
-            // and return { user, token }, update the main App state here:
-            // if (result && result.token && result.user) {
-            //    localStorage.setItem('authToken', result.token);
-            //    // Need a way to update App's state (pass down setters or use Context)
-            //    // setAuthToken(result.token); // Can't call App's setter directly
-            //    console.log("Google login successful, need to update App state");
-            // }
+            if (result && result.token && result.user) {
+                localStorage.setItem('authToken', result.token);
+                // Need a way to update App's state (pass down setters or use Context)
+                // setAuthToken(result.token); // Can't call App's setter directly
+                console.log("Google login successful, need to update App state");
+             }
         } catch (error) {
             console.error("Google Sign-In Error:", error);
             // Need a way to show error (pass down setter or use Context)
