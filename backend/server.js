@@ -11,6 +11,9 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { OAuth2Client } = require('google-auth-library');
 
+const Kuroshiro = require('kuroshiro').default; // Use .default for ES6 module style
+const KuromojiAnalyzer = require('kuroshiro-analyzer-kuromoji');
+
 // --- Initialize DB Pool ---
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -42,6 +45,22 @@ if (!GOOGLE_CLIENT_ID) {
     console.error("FATAL ERROR: GOOGLE_CLIENT_ID environment variable is not set.");
 }
 
+
+let kuroshiro;
+let isKuroshiroReady = false;
+async function initializeKuroshiro() {
+    try {
+        kuroshiro = new Kuroshiro();
+        // Initialize with Kuromoji analyzer. This loads the dictionary asynchronously.
+        await kuroshiro.init(new KuromojiAnalyzer({ dictPath: 'node_modules/kuromoji/dict' }));
+        isKuroshiroReady = true;
+        console.log("✅ Kuroshiro initialized successfully.");
+    } catch (kuroshiroError) {
+        console.error("❌ Error initializing Kuroshiro:", kuroshiroError);
+        // Handle initialization failure if necessary
+    }
+}
+initializeKuroshiro();
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -90,67 +109,89 @@ app.get('/', (req, res) => {
 // Gemini processing endpoint
 app.post('/api/process-text', async (req, res) => {
   console.log('Received request to /api/process-text');
-   if (!model || !apiKey) {
-     console.error("Gemini model not initialized or API key missing.");
+
+  // Check if required services are ready
+  if (!model || !apiKey) {
      return res.status(500).json({ error: "Internal Server Error: AI model not configured or API key missing." });
-   }
+  }
+  if (!isKuroshiroReady || !kuroshiro) {
+     console.error("Kuroshiro not ready.");
+     return res.status(500).json({ error: "Internal Server Error: Language processor not ready." });
+  }
+
   const { text } = req.body;
   if (!text || typeof text !== 'string' || text.trim().length === 0) {
     return res.status(400).json({ error: 'No text provided in the request body.' });
   }
-  console.log('Processing text length:', text.length); // Log length instead of full text
+  console.log('Processing text length:', text.length);
 
   try {
     const sentences = text.match(/[^。！？]+[。！？]?/g) || [text];
     const results = [];
+
     for (const sentence of sentences) {
         const trimmedSentence = sentence.trim();
         if (trimmedSentence.length === 0) continue;
-        // Construct prompt for Gemini
-        const prompt = `
-            You are an assistant that processes Japanese text for language learners.
-            For the given Japanese input sentence, provide ONLY a valid JSON object (no other text, explanations, or markdown formatting) with the following keys:
-            - "original": The original Japanese sentence.
-            - "furigana_html": The Japanese sentence with furigana added for all applicable kanji using HTML ruby tags (<ruby>Kanji<rt>Reading</rt></ruby>). Do not add furigana for hiragana or katakana. Ensure the output is a single string containing the HTML.
-            - "translation": A natural English translation of the sentence.
+        console.log(`Processing sentence: "${trimmedSentence}"`);
 
-            Input Sentence:
-            "${trimmedSentence}"
+        let furiganaHtml = trimmedSentence; // Default if kuroshiro fails
+        let translation = "[Translation Error]";
+        let apiError = null;
 
-            JSON Output:
-          `;
         try {
-          const result = await model.generateContent(prompt);
-          const response = result.response;
-          const responseText = response.text();
-          let parsedJson;
-          try {
-            const jsonMatch = responseText.match(/```json\s*([\s\S]*?)\s*```/);
-            const jsonString = jsonMatch ? jsonMatch[1] : responseText;
-            parsedJson = JSON.parse(jsonString);
-            // Basic validation
-            if (parsedJson && parsedJson.original && parsedJson.furigana_html && parsedJson.translation) {
-              results.push(parsedJson);
-            } else {
-              console.error('Error: Gemini response missing expected JSON fields.');
-              results.push({ original: trimmedSentence, furigana_html: trimmedSentence, translation: "[Translation Error]", error: "Invalid JSON structure from API" });
+            // ** 1. Generate Furigana using Kuroshiro **
+            furiganaHtml = await kuroshiro.convert(trimmedSentence, {
+                to: 'hiragana', // Target script for readings
+                mode: 'furigana' // Output mode with <ruby> tags
+            });
+            console.log(`Kuroshiro generated furigana for: "${trimmedSentence}"`);
+
+            // ** 2. Get Translation using Gemini **
+            const prompt = `
+                Translate the following Japanese sentence accurately into natural English.
+                Return ONLY the English translation as a plain string, without any labels, quotes, or explanations.
+
+                Input Sentence:
+                "${trimmedSentence}"
+
+                English Translation:
+            `; // ** SIMPLER PROMPT **
+
+            try {
+                const result = await model.generateContent(prompt);
+                const response = result.response;
+                translation = response.text().trim(); // Get translation directly
+                console.log(`Gemini generated translation for: "${trimmedSentence}"`);
+            } catch (geminiError) {
+                console.error('Error calling Gemini API for translation:', trimmedSentence, geminiError);
+                apiError = geminiError.message || "Translation API call failed";
+                // Keep default translation "[Translation Error]"
             }
-          } catch (parseError) {
-             console.error('Error parsing JSON response from Gemini:', parseError);
-             results.push({ original: trimmedSentence, furigana_html: trimmedSentence, translation: "[Translation Error]", error: "Failed to parse API response" });
-           }
-        } catch (apiError) {
-            console.error('Error calling Gemini API for sentence:', apiError);
-            results.push({ original: trimmedSentence, furigana_html: trimmedSentence, translation: "[Translation Error]", error: "API call failed" });
+
+        } catch (processingError) { // Catch errors from Kuroshiro or Gemini call logic
+            console.error('Error processing sentence:', trimmedSentence, processingError);
+            apiError = processingError.message || "Processing failed";
+            // Use defaults set above (original text for furigana, error for translation)
         }
+
+        // ** 3. Assemble Result **
+        results.push({
+            original: trimmedSentence,
+            furigana_html: furiganaHtml,
+            translation: translation,
+            // Include error if one occurred during processing this sentence
+            ...(apiError && { error: apiError })
+        });
+
     } // End sentence loop
+
     res.status(200).json({ processedSentences: results });
-  } catch (error) {
-      console.error('Unexpected error processing text:', error);
+
+  } catch (error) { // Catch unexpected errors in the main endpoint logic
+      console.error('Unexpected error in /api/process-text:', error);
       res.status(500).json({ error: 'An internal server error occurred.' });
   }
 });
-
 
 // --- Authentication Endpoints ---
 
