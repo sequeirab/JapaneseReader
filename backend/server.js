@@ -351,3 +351,6 @@ app.post('/auth/google', async (req, res) => {
 app.listen(port, () => {
   console.log(`✨ Backend server is running on port ${port}`);
 });
+
+// Export the app for testing purposes
+module.exports = { app };
