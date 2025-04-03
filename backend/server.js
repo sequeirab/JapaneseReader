@@ -1,4 +1,4 @@
-// backend/server.js (Using kanji.js)
+// backend/server.js (Using kanji.js & direct Kuromoji)
 
 require('dotenv').config();
 const express = require('express');
@@ -10,11 +10,11 @@ const jwt = require('jsonwebtoken');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { OAuth2Client } = require('google-auth-library');
-// Removed path and fs as Kanjidic XML file is no longer needed
 
 const Kuroshiro = require('kuroshiro').default;
-const KuromojiAnalyzer = require('kuroshiro-analyzer-kuromoji');
+const KuromojiAnalyzer = require('kuroshiro-analyzer-kuromoji'); // Still needed for Kuroshiro init
 const kanji = require('kanji.js'); // Import kanji.js library
+const kuromoji = require('kuromoji'); // Import kuromoji directly
 
 // --- Initialize DB Pool ---
 const pool = new Pool({
@@ -47,35 +47,53 @@ if (!GOOGLE_CLIENT_ID) {
     console.error("FATAL ERROR: GOOGLE_CLIENT_ID environment variable is not set.");
 }
 
-// --- Initialize Kuroshiro ---
+// --- Initialize Kuroshiro (only for utility functions now) ---
 let kuroshiro;
-let kuroshiroAnalyzer; // Keep analyzer instance for tokenization
 let isKuroshiroReady = false;
 async function initializeKuroshiro() {
+    // We still init Kuroshiro to use its utility functions like kanaToHiragana
+    // but we don't strictly need its analyzer instance for tokenization anymore.
     try {
         kuroshiro = new Kuroshiro();
-        // Initialize with Kuromoji analyzer.
-        kuroshiroAnalyzer = new KuromojiAnalyzer({ dictPath: 'node_modules/kuromoji/dict' });
-        await kuroshiro.init(kuroshiroAnalyzer); // Pass the instance here
+        // Need to pass an analyzer instance even if we don't use its methods directly
+        const analyzer = new KuromojiAnalyzer({ dictPath: 'node_modules/kuromoji/dict' });
+        await kuroshiro.init(analyzer);
         isKuroshiroReady = true;
-        console.log("✅ Kuroshiro initialized successfully.");
+        console.log("✅ Kuroshiro initialized successfully (for utils).");
     } catch (kuroshiroError) {
         console.error("❌ Error initializing Kuroshiro:", kuroshiroError);
-        // Ensure analyzer is null if init fails to prevent later errors
-        kuroshiroAnalyzer = null;
         kuroshiro = null;
     }
 }
 
-// Initialize Kuroshiro
-initializeKuroshiro().then(() => {
-    if(isKuroshiroReady) {
-      console.log("✅ Kuroshiro language processor initialized.");
-    } else {
-      console.error("⚠️ Kuroshiro initialization failed. Tokenization might not work.");
-    }
+// --- Initialize Kuromoji Tokenizer ---
+let kuromojiTokenizer;
+let isKuromojiReady = false;
+function initializeKuromoji() {
+    console.log("⏳ Initializing Kuromoji tokenizer...");
+    return new Promise((resolve, reject) => {
+        kuromoji.builder({ dicPath: "node_modules/kuromoji/dict" })
+            .build((err, tokenizer) => {
+                if (err) {
+                    console.error("❌ Error building Kuromoji tokenizer:", err);
+                    kuromojiTokenizer = null;
+                    isKuromojiReady = false;
+                    reject(err);
+                } else {
+                    kuromojiTokenizer = tokenizer;
+                    isKuromojiReady = true;
+                    console.log("✅ Kuromoji tokenizer initialized successfully.");
+                    resolve();
+                }
+            });
+    });
+}
+
+// Initialize Kuroshiro and Kuromoji concurrently
+Promise.all([initializeKuroshiro(), initializeKuromoji()]).then(() => {
+    console.log("✅✅ All language processors initialized (Kuroshiro utils, Kuromoji tokenizer).");
 }).catch(err => {
-    console.error("❌ Error during Kuroshiro initialization:", err);
+    console.error("❌ Error during initialization:", err);
 });
 
 
@@ -119,7 +137,7 @@ app.get('/', (req, res) => {
   res.send('Hello from the Japanese Processor Backend! 👋');
 });
 
-// --- Text Processing Endpoint (REVISED for kanji.js) ---
+// --- Text Processing Endpoint (Using direct Kuromoji) ---
 app.post('/api/process-text', async (req, res) => {
   console.log('Received request to /api/process-text');
 
@@ -127,11 +145,17 @@ app.post('/api/process-text', async (req, res) => {
   if (!model || !apiKey) {
      return res.status(500).json({ error: "Internal Server Error: AI model not configured." });
   }
-  // Ensure Kuroshiro AND its analyzer are ready before proceeding
-  if (!isKuroshiroReady || !kuroshiro || !kuroshiroAnalyzer) {
-     console.error("Kuroshiro or its analyzer not ready.");
-     return res.status(500).json({ error: "Internal Server Error: Language processor not ready." });
+  // Check if Kuromoji tokenizer is ready
+  if (!isKuromojiReady || !kuromojiTokenizer) {
+     console.error("Kuromoji tokenizer not ready.");
+     return res.status(500).json({ error: "Internal Server Error: Tokenizer not ready." });
   }
+   // Check if Kuroshiro utils are ready (optional, only needed for kanaToHiragana)
+   if (!isKuroshiroReady || !kuroshiro) {
+     console.warn("Kuroshiro utils not ready, readings might be in Katakana.");
+     // Allow processing to continue, but readings might be Katakana
+   }
+
 
   const { text } = req.body;
   if (!text || typeof text !== 'string' || text.trim().length === 0) {
@@ -155,41 +179,42 @@ app.post('/api/process-text', async (req, res) => {
         let sentenceProcessingError = null;
 
         try {
-            // 2a. Tokenize the sentence
-            // --- FIX: Call tokenize directly on the analyzer instance ---
-            const tokens = await kuroshiroAnalyzer.tokenize(trimmedSentence);
-            // --- END FIX ---
+            // 2a. Tokenize the sentence using the direct Kuromoji tokenizer
+            // Note: kuromoji.tokenize is synchronous
+            const tokens = kuromojiTokenizer.tokenize(trimmedSentence);
 
             // 2b. Process each token
             for (const token of tokens) {
                 const surface = token.surface_form;
-                const reading = token.reading ? Kuroshiro.Util.kanaToHiragana(token.reading) : null;
-                const containsKanji = surface.split('').some(isKanji);
+                // Use reading from Kuromoji token, convert to Hiragana using Kuroshiro util if available
+                let reading = token.reading || null;
+                if (reading && kuroshiro) { // Check if kuroshiro is ready
+                    reading = Kuroshiro.Util.kanaToHiragana(reading);
+                } else if (reading) {
+                    // If kuroshiro isn't ready, reading might be Katakana
+                    console.warn(`Kuroshiro util not ready, keeping reading as: ${reading}`);
+                }
 
+                const containsKanji = surface.split('').some(isKanji);
                 let kanjiDetails = {}; // Store details for unique Kanji in this token
 
                 if (containsKanji) {
                     const uniqueKanjiInToken = [...new Set(surface.split('').filter(isKanji))];
-
-                    // Look up details using kanji.js
                     for (const char of uniqueKanjiInToken) {
                         try {
-                            // Use kanji.js find method (or appropriate method per library docs)
                             const lookupResult = kanji.find(char);
                             if (lookupResult && typeof lookupResult === 'object') {
-                                // Extract relevant data - **adjust field names based on actual kanji.js output**
                                 kanjiDetails[char] = {
-                                    meanings: lookupResult.meaning ? lookupResult.meaning.split(',') : (lookupResult.meanings || []), // Adapt based on actual structure
-                                    readings_on: lookupResult.onyomi || [], // Check actual field names
-                                    readings_kun: lookupResult.kunyomi || [], // Check actual field names
+                                    meanings: lookupResult.meaning ? lookupResult.meaning.split(',') : (lookupResult.meanings || []),
+                                    readings_on: lookupResult.onyomi || [],
+                                    readings_kun: lookupResult.kunyomi || [],
                                     stroke_count: lookupResult.stroke_count || null,
                                     grade: lookupResult.grade || null,
                                     jlpt: lookupResult.jlpt || null,
-                                    // Add other fields provided by kanji.js if needed
                                 };
                             } else {
                                 console.warn(`Kanji '${char}' not found or invalid result from kanji.js.`);
-                                kanjiDetails[char] = null; // Indicate not found
+                                kanjiDetails[char] = null;
                             }
                         } catch (lookupErr) {
                             console.error(`Error looking up Kanji '${char}' with kanji.js:`, lookupErr);
@@ -204,6 +229,8 @@ app.post('/api/process-text', async (req, res) => {
                     is_kanji_token: containsKanji,
                     furigana: (reading && reading !== surface) ? reading : null,
                     kanji_details: Object.keys(kanjiDetails).length > 0 ? kanjiDetails : null,
+                    // Optional: Add part_of_speech: token.pos, etc. from Kuromoji if needed
+                    pos: token.pos || null, // Example: adding part of speech
                 });
             } // End token loop
 
@@ -225,11 +252,13 @@ app.post('/api/process-text', async (req, res) => {
             }
 
         } catch (processingError) {
+            // Catch errors from token processing or kanji lookup
             console.error('Error processing sentence segments:', trimmedSentence, processingError);
             sentenceProcessingError = processingError.message || "Segment processing failed";
-            if (segments.length === 0) {
+            // Ensure segments array isn't completely empty if error occurred mid-processing
+             if (segments.length === 0) {
                  segments.push({ text: trimmedSentence, is_kanji_token: false, furigana: null, kanji_details: null, error: sentenceProcessingError });
-            }
+             }
         }
 
         // 3. Assemble Result for this sentence
