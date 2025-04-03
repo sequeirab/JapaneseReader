@@ -1,4 +1,4 @@
-// backend/server.js (Attempting kuroshiro.analyzer.tokenize)
+// backend/server.js (Simplified - No Tokenizer, Jisho API for Chars)
 
 require('dotenv').config();
 const express = require('express');
@@ -12,7 +12,7 @@ const rateLimit = require('express-rate-limit');
 const { OAuth2Client } = require('google-auth-library');
 
 const Kuroshiro = require('kuroshiro').default;
-const KuromojiAnalyzer = require('kuroshiro-analyzer-kuromoji');
+const KuromojiAnalyzer = require('kuroshiro-analyzer-kuromoji'); // Still needed for Kuroshiro init
 // Removed direct kuromoji import
 const JishoApi = require('unofficial-jisho-api');
 
@@ -48,26 +48,17 @@ if (!GOOGLE_CLIENT_ID) {
     console.error("FATAL ERROR: GOOGLE_CLIENT_ID environment variable is not set.");
 }
 
-// --- Initialize Kuroshiro (Hoping analyzer is accessible after init) ---
+// --- Initialize Kuroshiro (Only needed for furigana HTML now) ---
 let kuroshiro;
 let isKuroshiroReady = false;
 async function initializeKuroshiro() {
     try {
         kuroshiro = new Kuroshiro();
-        // Create analyzer instance
         const analyzer = new KuromojiAnalyzer({ dictPath: 'node_modules/kuromoji/dict' });
         console.log("⏳ Initializing Kuroshiro (and its internal Kuromoji)...");
-        // Initialize Kuroshiro WITH the analyzer
         await kuroshiro.init(analyzer);
-        // Now, kuroshiro *might* have a reference to the initialized analyzer
         isKuroshiroReady = true;
         console.log("✅ Kuroshiro initialized successfully.");
-        // Optional: Check if analyzer seems accessible now
-        if (kuroshiro.analyzer && typeof kuroshiro.analyzer.tokenize === 'function') {
-             console.log("✅ Tokenizer seems accessible via kuroshiro.analyzer.tokenize");
-        } else {
-             console.warn("⚠️ Tokenizer might NOT be accessible via kuroshiro.analyzer.tokenize");
-        }
     } catch (kuroshiroError) {
         console.error("❌ Error initializing Kuroshiro:", kuroshiroError);
         kuroshiro = null;
@@ -124,7 +115,7 @@ app.get('/', (req, res) => {
   res.send('Hello from the Japanese Processor Backend! 👋');
 });
 
-// --- Text Processing Endpoint (Trying kuroshiro.analyzer.tokenize) ---
+// --- Text Processing Endpoint (Simplified - No Tokenizer) ---
 app.post('/api/process-text', async (req, res) => {
   console.log('Received request to /api/process-text');
 
@@ -132,7 +123,6 @@ app.post('/api/process-text', async (req, res) => {
   if (!model || !apiKey) {
      return res.status(500).json({ error: "Internal Server Error: AI model not configured." });
   }
-  // Check Kuroshiro readiness
   if (!isKuroshiroReady || !kuroshiro) {
      console.error("Kuroshiro not ready.");
      return res.status(500).json({ error: "Internal Server Error: Language processor not ready." });
@@ -156,80 +146,51 @@ app.post('/api/process-text', async (req, res) => {
         console.log(`Processing sentence: "${trimmedSentence}"`);
 
         let translation = "[Translation Error]";
-        let segments = [];
+        let furiganaHtml = trimmedSentence; // Default if Kuroshiro fails
+        let kanjiDetailsMap = {}; // Store details for unique Kanji in this sentence
         let sentenceProcessingError = null;
 
         try {
-            // 2a. Tokenize using the analyzer potentially attached to kuroshiro instance
-            console.log("⏳ Attempting tokenization via kuroshiro.analyzer.tokenize...");
+            // 2a. Generate Furigana HTML using Kuroshiro
+            console.log("⏳ Generating furigana HTML...");
+            furiganaHtml = await kuroshiro.convert(trimmedSentence, { mode: "furigana", to: "hiragana" });
+            console.log("✅ Furigana HTML generated.");
 
-            // --- Add check before attempting to call ---
-            if (!kuroshiro.analyzer || typeof kuroshiro.analyzer.tokenize !== 'function') {
-                console.error("Error: Tokenizer function not found at kuroshiro.analyzer.tokenize");
-                throw new Error("Tokenizer function not available via kuroshiro.analyzer");
-            }
-            // --- End check ---
+            // 2b. Find unique Kanji characters in the sentence
+            const uniqueKanjiInSentence = [...new Set(trimmedSentence.split('').filter(isKanji))];
+            console.log(`Found unique Kanji: ${uniqueKanjiInSentence.join(', ')}`);
 
-            // Call tokenize (Kuromoji's tokenize is sync, but use await just in case wrapper makes it async)
-            const tokens = await kuroshiro.analyzer.tokenize(trimmedSentence);
-            console.log("Tokens received:", JSON.stringify(tokens, null, 2)); // Log structure
-
-            // 2b. Process each token
-            for (const token of tokens) {
-                const surface = token.surface_form; // Assuming Kuromoji token structure
-                let reading = token.reading || null;
-                if (reading) { // Convert reading if needed (already checked kuroshiro readiness)
-                    reading = Kuroshiro.Util.kanaToHiragana(reading);
-                }
-
-                if (!surface) continue;
-
-                const containsKanji = surface.split('').some(isKanji);
-                let kanjiDetails = {};
-
-                if (containsKanji) {
-                    const uniqueKanjiInToken = [...new Set(surface.split('').filter(isKanji))];
-                    for (const char of uniqueKanjiInToken) {
-                        try {
-                            console.log(`Looking up Kanji '${char}' via Jisho API...`);
-                            const result = await jisho.searchForKanji(char);
-                            if (result && result.found && result.data) {
-                                const data = result.data;
-                                kanjiDetails[char] = {
-                                    uri: result.uri,
-                                    meanings: data.meaning ? data.meaning.split(', ') : [],
-                                    readings_on: data.onyomi || [],
-                                    readings_kun: data.kunyomi || [],
-                                    stroke_count: data.stroke_count || null,
-                                    grade: data.grade || null,
-                                    jlpt: data.jlpt || null,
-                                    newspaper_frequency: data.newspaper_frequency || null,
-                                    taught_in: data.taught_in || null,
-                                    radical: data.radical ? data.radical.symbol : null,
-                                };
-                                console.log(`Found details for Kanji '${char}'`);
-                            } else {
-                                console.warn(`Kanji '${char}' not found via Jisho API.`);
-                                kanjiDetails[char] = null;
-                            }
-                        } catch (lookupErr) {
-                            console.error(`Error looking up Kanji '${char}' with Jisho API:`, lookupErr);
-                            kanjiDetails[char] = { error: 'Jisho API lookup failed' };
-                        }
+            // 2c. Look up details for each unique Kanji using Jisho API
+            for (const char of uniqueKanjiInSentence) {
+                try {
+                    console.log(`Looking up Kanji '${char}' via Jisho API...`);
+                    const result = await jisho.searchForKanji(char);
+                    if (result && result.found && result.data) {
+                        const data = result.data;
+                        kanjiDetailsMap[char] = { // Store details keyed by the Kanji character
+                            uri: result.uri,
+                            meanings: data.meaning ? data.meaning.split(', ') : [],
+                            readings_on: data.onyomi || [],
+                            readings_kun: data.kunyomi || [],
+                            stroke_count: data.stroke_count || null,
+                            grade: data.grade || null,
+                            jlpt: data.jlpt || null,
+                            newspaper_frequency: data.newspaper_frequency || null,
+                            taught_in: data.taught_in || null,
+                            radical: data.radical ? data.radical.symbol : null,
+                        };
+                        console.log(`Found details for Kanji '${char}'`);
+                    } else {
+                        console.warn(`Kanji '${char}' not found via Jisho API.`);
+                        kanjiDetailsMap[char] = null; // Indicate not found
                     }
+                } catch (lookupErr) {
+                    console.error(`Error looking up Kanji '${char}' with Jisho API:`, lookupErr);
+                    kanjiDetailsMap[char] = { error: 'Jisho API lookup failed' };
                 }
+            } // End Kanji char loop
 
-                // Add segment to the results
-                segments.push({
-                    text: surface,
-                    is_kanji_token: containsKanji,
-                    furigana: (reading && reading !== surface) ? reading : null,
-                    kanji_details: Object.keys(kanjiDetails).length > 0 ? kanjiDetails : null,
-                    pos: token.pos || null, // Assuming Kuromoji token structure
-                });
-            } // End token loop
-
-            // 2c. Get Translation using Gemini
+            // 2d. Get Translation using Gemini
             const prompt = `
                 Translate the following Japanese sentence accurately into natural English.
                 Return ONLY the English translation as a plain string, without any labels, quotes, or explanations.
@@ -247,18 +208,19 @@ app.post('/api/process-text', async (req, res) => {
             }
 
         } catch (processingError) {
-            console.error('Error processing sentence segments:', trimmedSentence, processingError);
-            sentenceProcessingError = processingError.message || "Segment processing failed";
-             if (segments.length === 0) {
-                 segments.push({ text: trimmedSentence, is_kanji_token: false, furigana: null, kanji_details: null, error: sentenceProcessingError });
-             }
+            // Catch errors from Kuroshiro conversion or Jisho API lookup logic
+            console.error('Error processing sentence:', trimmedSentence, processingError);
+            sentenceProcessingError = processingError.message || "Sentence processing failed";
+            // Use original sentence as furiganaHTML if conversion failed
+            if (furiganaHtml === trimmedSentence) furiganaHtml = trimmedSentence;
         }
 
-        // 3. Assemble Result for this sentence
+        // 3. Assemble Result for this sentence (Simplified Structure)
         processedSentences.push({
             original_sentence: trimmedSentence,
-            segments: segments,
+            furigana_html: furiganaHtml, // The HTML string with <ruby> tags
             translation: translation,
+            kanji_details_map: kanjiDetailsMap, // Map of Kanji char -> details object
             ...(sentenceProcessingError && { error: sentenceProcessingError })
         });
 
