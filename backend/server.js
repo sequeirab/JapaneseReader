@@ -56,21 +56,24 @@ async function initializeKuroshiro() {
         kuroshiro = new Kuroshiro();
         // Initialize with Kuromoji analyzer.
         kuroshiroAnalyzer = new KuromojiAnalyzer({ dictPath: 'node_modules/kuromoji/dict' });
-        await kuroshiro.init(kuroshiroAnalyzer);
+        await kuroshiro.init(kuroshiroAnalyzer); // Pass the instance here
         isKuroshiroReady = true;
         console.log("✅ Kuroshiro initialized successfully.");
     } catch (kuroshiroError) {
         console.error("❌ Error initializing Kuroshiro:", kuroshiroError);
+        // Ensure analyzer is null if init fails to prevent later errors
+        kuroshiroAnalyzer = null;
+        kuroshiro = null;
     }
 }
 
-// --- Initialize Kanjidic (REMOVED) ---
-// No explicit initialization needed for kanji.js as it likely uses static methods or bundles data.
-// Removed initializeKanjidic function and related checks/variables.
-
-// Initialize Kuroshiro (Kanjidic init removed from Promise.all)
+// Initialize Kuroshiro
 initializeKuroshiro().then(() => {
-    console.log("✅ Kuroshiro language processor initialized.");
+    if(isKuroshiroReady) {
+      console.log("✅ Kuroshiro language processor initialized.");
+    } else {
+      console.error("⚠️ Kuroshiro initialization failed. Tokenization might not work.");
+    }
 }).catch(err => {
     console.error("❌ Error during Kuroshiro initialization:", err);
 });
@@ -124,11 +127,11 @@ app.post('/api/process-text', async (req, res) => {
   if (!model || !apiKey) {
      return res.status(500).json({ error: "Internal Server Error: AI model not configured." });
   }
+  // Ensure Kuroshiro AND its analyzer are ready before proceeding
   if (!isKuroshiroReady || !kuroshiro || !kuroshiroAnalyzer) {
-     console.error("Kuroshiro not ready.");
-     return res.status(500).json({ error: "Internal Server Error: Furigana processor not ready." });
+     console.error("Kuroshiro or its analyzer not ready.");
+     return res.status(500).json({ error: "Internal Server Error: Language processor not ready." });
   }
-  // Removed Kanjidic readiness check
 
   const { text } = req.body;
   if (!text || typeof text !== 'string' || text.trim().length === 0) {
@@ -153,7 +156,9 @@ app.post('/api/process-text', async (req, res) => {
 
         try {
             // 2a. Tokenize the sentence
-            const tokens = await kuroshiroAnalyzer.analyzer.tokenize(trimmedSentence);
+            // --- FIX: Call tokenize directly on the analyzer instance ---
+            const tokens = await kuroshiroAnalyzer.tokenize(trimmedSentence);
+            // --- END FIX ---
 
             // 2b. Process each token
             for (const token of tokens) {
