@@ -4,9 +4,8 @@ import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css'; // Import default Tippy CSS styles
 // import 'tippy.js/themes/light.css'; // Optional theme
 
-// --- NEW: Component to render formatted Kanji details in the tooltip ---
+// --- Updated Component to render SIMPLIFIED Kanji details ---
 function KanjiTooltipContent({ details, kanjiChar }) {
-  // Handle cases where details might be missing or lookup failed
   if (!details) {
     return `No details found for ${kanjiChar}.`;
   }
@@ -15,24 +14,33 @@ function KanjiTooltipContent({ details, kanjiChar }) {
   }
 
   // Helper to join readings array, handling potential undefined/empty arrays
-  const formatReadings = (readings) => (readings && readings.length > 0 ? readings.join(', ') : 'N/A');
+  // Limit to max 2 readings for simplicity
+  const formatReadings = (readings) => (readings && readings.length > 0 ? readings.slice(0, 2).join(', ') : 'N/A');
+  // Limit meanings to max 3
+  const formatMeanings = (meanings) => (meanings && meanings.length > 0 ? meanings.slice(0, 3).join(', ') : 'N/A');
+
 
   return (
     <div className="text-left p-1 max-w-xs"> {/* Basic tooltip styling */}
       <h4 className="font-bold text-lg mb-1">{kanjiChar}</h4>
       {details.meanings && details.meanings.length > 0 && (
-        <p className="text-sm mb-1"><strong>Meanings:</strong> {details.meanings.join(', ')}</p>
+        // Show only first few meanings
+        <p className="text-sm mb-1"><strong>Meanings:</strong> {formatMeanings(details.meanings)}</p>
       )}
       <p className="text-sm mb-1">
+        {/* Show only first few readings */}
         <strong>On:</strong> {formatReadings(details.readings_on)}
         <strong className="ml-3">Kun:</strong> {formatReadings(details.readings_kun)}
       </p>
-      <div className="text-xs text-gray-300 mt-1"> {/* Lighter text for secondary info */}
-        {details.stroke_count && <span>Strokes: {details.stroke_count}</span>}
+      <div className="text-xs text-gray-300 mt-1">
+        {/* Removed Stroke Count */}
+        {/* {details.stroke_count && <span>Strokes: {details.stroke_count}</span>} */}
+        {/* Removed Radical */}
+        {/* {details.radical && <span className="ml-2">Radical: {details.radical}</span>} */}
+        {details.jlpt && <span>JLPT: {details.jlpt}</span>}
         {details.grade && <span className="ml-2">Grade: {details.grade}</span>}
-        {details.jlpt && <span className="ml-2">JLPT: N{details.jlpt}</span>}
       </div>
-       {/* Optional: Link to Jisho page */}
+       {/* Keep Link to Jisho page */}
        {details.uri && (
             <a
                 href={details.uri}
@@ -48,11 +56,9 @@ function KanjiTooltipContent({ details, kanjiChar }) {
 }
 
 
-// --- Main OutputDisplay Component ---
+// --- Main OutputDisplay Component (No changes needed here) ---
 function OutputDisplay({ processedData, isLoading, error }) {
 
-  // --- Function to Parse Furigana HTML and Wrap Kanji with Tippy ---
-  // Now accepts kanjiDetailsMap for the current sentence
   const renderFurigana = useCallback((htmlString, kanjiDetailsMap) => {
     if (!htmlString) return null;
 
@@ -73,20 +79,17 @@ function OutputDisplay({ processedData, isLoading, error }) {
 
       const baseElements = baseText.split('').map((char, index) => {
         if (kanjiRegex.test(char)) {
-          // --- Look up details for this specific Kanji character ---
           const details = kanjiDetailsMap ? kanjiDetailsMap[char] : null;
 
           return (
             <Tippy
               key={`${match.index}-base-${index}-tippy`}
-              // --- Use the new component for tooltip content ---
               content={<KanjiTooltipContent details={details} kanjiChar={char} />}
-              allowHTML={true} // IMPORTANT: Allow HTML/JSX in content
-              // --- End content update ---
+              allowHTML={true}
               placement="bottom"
               animation="fade"
               duration={200}
-              interactive={true} // Allow interacting with tooltip content (e.g., clicking link)
+              interactive={true}
               // theme="light"
             >
               <span className="kanji-hover">
@@ -115,7 +118,7 @@ function OutputDisplay({ processedData, isLoading, error }) {
 
     return parts.length > 0 ? parts : [htmlString];
 
-  }, []); // No dependencies needed
+  }, []);
 
 
   // Determine current display state
@@ -140,21 +143,17 @@ function OutputDisplay({ processedData, isLoading, error }) {
       {/* Results Display Area */}
       {!isLoading && !error && hasResults && (
         <div className="space-y-4">
-          {/* --- Pass kanji_details_map to renderFurigana --- */}
           {processedData.map((sentence, index) => (
             <div key={index} className="p-4 border border-stone-300/50 rounded-md bg-white/80 shadow-sm">
               <p className="text-2xl mb-2 text-stone-800 leading-relaxed">
-                {/* Pass the map for the current sentence */}
                 {renderFurigana(sentence.furigana_html || sentence.original_sentence, sentence.kanji_details_map)}
               </p>
               <p className="text-lg text-stone-700 italic mt-1">
                 {sentence.translation || '[No Translation Provided]'}
               </p>
-               {/* Display sentence-level processing error if any */}
                {sentence.error && <p className="text-xs text-red-500 mt-1">Processing Error: {sentence.error}</p>}
             </div>
           ))}
-          {/* --- End map update --- */}
         </div>
       )}
 

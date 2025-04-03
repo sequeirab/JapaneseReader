@@ -1,4 +1,4 @@
-// backend/server.js (Simplified - No Tokenizer, Jisho API for Chars)
+// backend/server.js (Using Gemini 2.0 Flash)
 
 require('dotenv').config();
 const express = require('express');
@@ -12,9 +12,9 @@ const rateLimit = require('express-rate-limit');
 const { OAuth2Client } = require('google-auth-library');
 
 const Kuroshiro = require('kuroshiro').default;
-const KuromojiAnalyzer = require('kuroshiro-analyzer-kuromoji'); // Still needed for Kuroshiro init
-// Removed direct kuromoji import
+const KuromojiAnalyzer = require('kuroshiro-analyzer-kuromoji');
 const JishoApi = require('unofficial-jisho-api');
+const wanakana = require('wanakana'); // Import wanakana
 
 const jisho = new JishoApi();
 
@@ -34,10 +34,16 @@ let model;
 try {
     if (!apiKey) throw new Error("API Key missing");
     const genAI = new GoogleGenerativeAI(apiKey);
-    model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
-    console.log("✅ Gemini client initialized successfully.");
+    // --- UPDATED MODEL IDENTIFIER ---
+    model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    // --- END UPDATE ---
+    console.log("✅ Gemini client initialized successfully with model: gemini-2.0-flash");
 } catch (initError) {
     console.error("❌ Error initializing Gemini client:", initError.message);
+    // Attempt fallback or log more specific error if model name is invalid for this library
+    if (initError.message.includes('model')) {
+         console.error("⚠️ Possible invalid model name for Node.js library. Check documentation.");
+    }
     model = null;
 }
 
@@ -48,12 +54,12 @@ if (!GOOGLE_CLIENT_ID) {
     console.error("FATAL ERROR: GOOGLE_CLIENT_ID environment variable is not set.");
 }
 
-// --- Initialize Kuroshiro (Only needed for furigana HTML now) ---
-let kuroshiro;
+// --- Initialize Kuroshiro (Only needed for furigana HTML & kana conversion) ---
+let kuroshiro; // The Kuroshiro instance
 let isKuroshiroReady = false;
 async function initializeKuroshiro() {
     try {
-        kuroshiro = new Kuroshiro();
+        kuroshiro = new Kuroshiro(); // Assign to instance variable
         const analyzer = new KuromojiAnalyzer({ dictPath: 'node_modules/kuromoji/dict' });
         console.log("⏳ Initializing Kuroshiro (and its internal Kuromoji)...");
         await kuroshiro.init(analyzer);
@@ -123,7 +129,7 @@ app.post('/api/process-text', async (req, res) => {
   if (!model || !apiKey) {
      return res.status(500).json({ error: "Internal Server Error: AI model not configured." });
   }
-  if (!isKuroshiroReady || !kuroshiro) {
+  if (!isKuroshiroReady || !kuroshiro) { // Check the instance variable
      console.error("Kuroshiro not ready.");
      return res.status(500).json({ error: "Internal Server Error: Language processor not ready." });
   }
@@ -146,8 +152,8 @@ app.post('/api/process-text', async (req, res) => {
         console.log(`Processing sentence: "${trimmedSentence}"`);
 
         let translation = "[Translation Error]";
-        let furiganaHtml = trimmedSentence; // Default if Kuroshiro fails
-        let kanjiDetailsMap = {}; // Store details for unique Kanji in this sentence
+        let furiganaHtml = trimmedSentence;
+        let kanjiDetailsMap = {};
         let sentenceProcessingError = null;
 
         try {
@@ -165,28 +171,36 @@ app.post('/api/process-text', async (req, res) => {
                 try {
                     console.log(`Looking up Kanji '${char}' via Jisho API...`);
                     const result = await jisho.searchForKanji(char);
-                    if (result && result.found && result.data) {
-                        const data = result.data;
-                        kanjiDetailsMap[char] = { // Store details keyed by the Kanji character
+
+                    if (result && result.found) {
+                        let onyomiHiragana = [];
+                        if (result.onyomi && result.onyomi.length > 0) {
+                            onyomiHiragana = result.onyomi.map(onReading =>
+                                wanakana.toHiragana(onReading) // Use wanakana
+                            );
+                        }
+
+                        kanjiDetailsMap[char] = {
                             uri: result.uri,
-                            meanings: data.meaning ? data.meaning.split(', ') : [],
-                            readings_on: data.onyomi || [],
-                            readings_kun: data.kunyomi || [],
-                            stroke_count: data.stroke_count || null,
-                            grade: data.grade || null,
-                            jlpt: data.jlpt || null,
-                            newspaper_frequency: data.newspaper_frequency || null,
-                            taught_in: data.taught_in || null,
-                            radical: data.radical ? data.radical.symbol : null,
+                            meanings: result.meaning ? result.meaning.split(', ') : [],
+                            readings_on: onyomiHiragana,
+                            readings_kun: result.kunyomi || [],
+                            stroke_count: result.strokeCount || null,
+                            grade: result.grade || null,
+                            jlpt: result.jlptLevel || null,
+                            newspaper_frequency: result.newspaperFrequencyRank || null,
+                            taught_in: result.taughtIn || null,
+                            radical: result.radical ? result.radical.symbol : null,
                         };
                         console.log(`Found details for Kanji '${char}'`);
                     } else {
-                        console.warn(`Kanji '${char}' not found via Jisho API.`);
-                        kanjiDetailsMap[char] = null; // Indicate not found
+                        console.warn(`Kanji '${char}' not found via Jisho API. Found flag: ${result ? result.found : 'N/A'}`);
+                        kanjiDetailsMap[char] = null;
                     }
                 } catch (lookupErr) {
-                    console.error(`Error looking up Kanji '${char}' with Jisho API:`, lookupErr);
-                    kanjiDetailsMap[char] = { error: 'Jisho API lookup failed' };
+                    console.error(`Error object during lookup for Kanji '${char}':`, lookupErr);
+                    console.error(`Error looking up Kanji '${char}' with Jisho API:`, lookupErr.message);
+                    kanjiDetailsMap[char] = { error: `Jisho API lookup failed: ${lookupErr.message}` };
                 }
             } // End Kanji char loop
 
@@ -198,6 +212,8 @@ app.post('/api/process-text', async (req, res) => {
                 English Translation:
             `;
             try {
+                // Ensure model is valid before calling
+                 if (!model) throw new Error("Gemini model not initialized correctly.");
                 const result = await model.generateContent(prompt);
                 const response = result.response;
                 translation = response.text().trim();
@@ -208,19 +224,17 @@ app.post('/api/process-text', async (req, res) => {
             }
 
         } catch (processingError) {
-            // Catch errors from Kuroshiro conversion or Jisho API lookup logic
             console.error('Error processing sentence:', trimmedSentence, processingError);
             sentenceProcessingError = processingError.message || "Sentence processing failed";
-            // Use original sentence as furiganaHTML if conversion failed
             if (furiganaHtml === trimmedSentence) furiganaHtml = trimmedSentence;
         }
 
         // 3. Assemble Result for this sentence (Simplified Structure)
         processedSentences.push({
             original_sentence: trimmedSentence,
-            furigana_html: furiganaHtml, // The HTML string with <ruby> tags
+            furigana_html: furiganaHtml,
             translation: translation,
-            kanji_details_map: kanjiDetailsMap, // Map of Kanji char -> details object
+            kanji_details_map: kanjiDetailsMap,
             ...(sentenceProcessingError && { error: sentenceProcessingError })
         });
 
@@ -372,7 +386,7 @@ app.post('/auth/google', async (req, res) => {
       });
   } catch (error) {
       console.error('Google Sign-In Error:', error);
-      if (error.message.includes("Token used too late") || error.message.includes("Invalid token signature")) {
+      if (error.message.includes("Token used T late") || error.message.includes("Invalid token signature")) {
            res.status(401).json({ error: 'Invalid or expired Google token.' });
       } else {
            res.status(500).json({ error: 'Google Sign-In failed.' });

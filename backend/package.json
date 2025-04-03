@@ -27,7 +27,8 @@
     "kuroshiro": "^1.2.0",
     "kuroshiro-analyzer-kuromoji": "^1.1.0",
     "pg": "^8.14.1",
-    "unofficial-jisho-api": "^2.3.4"
+    "unofficial-jisho-api": "^2.3.4",
+    "wanakana": "^5.3.1"
   },
   "devDependencies": {
     "jest": "^29.7.0",
