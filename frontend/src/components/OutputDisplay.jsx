@@ -1,19 +1,59 @@
 // src/components/OutputDisplay.jsx
-import React, { useCallback } from 'react'; // Removed useState
-import Tippy from '@tippyjs/react'; // Import Tippy
-import 'tippy.js/dist/tippy.css'; // Import default Tippy CSS styles (optional but recommended)
-// You might want to import other Tippy themes like 'light' or 'light-border'
-// import 'tippy.js/themes/light.css';
+import React, { useCallback } from 'react';
+import Tippy from '@tippyjs/react';
+import 'tippy.js/dist/tippy.css'; // Import default Tippy CSS styles
+// import 'tippy.js/themes/light.css'; // Optional theme
 
-// --- Removed the custom Tooltip component ---
+// --- NEW: Component to render formatted Kanji details in the tooltip ---
+function KanjiTooltipContent({ details, kanjiChar }) {
+  // Handle cases where details might be missing or lookup failed
+  if (!details) {
+    return `No details found for ${kanjiChar}.`;
+  }
+  if (details.error) {
+    return `Error looking up ${kanjiChar}: ${details.error}`;
+  }
+
+  // Helper to join readings array, handling potential undefined/empty arrays
+  const formatReadings = (readings) => (readings && readings.length > 0 ? readings.join(', ') : 'N/A');
+
+  return (
+    <div className="text-left p-1 max-w-xs"> {/* Basic tooltip styling */}
+      <h4 className="font-bold text-lg mb-1">{kanjiChar}</h4>
+      {details.meanings && details.meanings.length > 0 && (
+        <p className="text-sm mb-1"><strong>Meanings:</strong> {details.meanings.join(', ')}</p>
+      )}
+      <p className="text-sm mb-1">
+        <strong>On:</strong> {formatReadings(details.readings_on)}
+        <strong className="ml-3">Kun:</strong> {formatReadings(details.readings_kun)}
+      </p>
+      <div className="text-xs text-gray-300 mt-1"> {/* Lighter text for secondary info */}
+        {details.stroke_count && <span>Strokes: {details.stroke_count}</span>}
+        {details.grade && <span className="ml-2">Grade: {details.grade}</span>}
+        {details.jlpt && <span className="ml-2">JLPT: N{details.jlpt}</span>}
+      </div>
+       {/* Optional: Link to Jisho page */}
+       {details.uri && (
+            <a
+                href={details.uri}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-blue-400 hover:text-blue-300 mt-1 block"
+            >
+                View on Jisho.org
+            </a>
+        )}
+    </div>
+  );
+}
+
 
 // --- Main OutputDisplay Component ---
 function OutputDisplay({ processedData, isLoading, error }) {
 
-  // --- Removed tooltipData state and event handlers (handleKanjiMouseEnter, handleKanjiMouseLeave) ---
-
   // --- Function to Parse Furigana HTML and Wrap Kanji with Tippy ---
-  const renderFurigana = useCallback((htmlString) => {
+  // Now accepts kanjiDetailsMap for the current sentence
+  const renderFurigana = useCallback((htmlString, kanjiDetailsMap) => {
     if (!htmlString) return null;
 
     const kanjiRegex = /[\u4E00-\u9FAF\u3400-\u4DBF]/;
@@ -33,26 +73,27 @@ function OutputDisplay({ processedData, isLoading, error }) {
 
       const baseElements = baseText.split('').map((char, index) => {
         if (kanjiRegex.test(char)) {
-          // --- Wrap Kanji span with Tippy component ---
+          // --- Look up details for this specific Kanji character ---
+          const details = kanjiDetailsMap ? kanjiDetailsMap[char] : null;
+
           return (
             <Tippy
               key={`${match.index}-base-${index}-tippy`}
-              content={`Kanji: ${char}`} // Set tooltip content directly
-              placement="bottom" // Specify desired placement (e.g., 'bottom', 'top', 'left', 'right')
-              animation="fade"   // Optional animation
-              duration={200}     // Optional duration
-              // You can add more Tippy props for customization (delay, theme, etc.)
-              // theme="light" // Example theme
+              // --- Use the new component for tooltip content ---
+              content={<KanjiTooltipContent details={details} kanjiChar={char} />}
+              allowHTML={true} // IMPORTANT: Allow HTML/JSX in content
+              // --- End content update ---
+              placement="bottom"
+              animation="fade"
+              duration={200}
+              interactive={true} // Allow interacting with tooltip content (e.g., clicking link)
+              // theme="light"
             >
-              <span
-                className="kanji-hover" // Keep class for cursor/styling
-                // Removed onMouseEnter/onMouseLeave - Tippy handles hover internally
-              >
+              <span className="kanji-hover">
                 {char}
               </span>
             </Tippy>
           );
-          // --- End Tippy wrapper ---
         } else {
           return char;
         }
@@ -74,7 +115,7 @@ function OutputDisplay({ processedData, isLoading, error }) {
 
     return parts.length > 0 ? parts : [htmlString];
 
-  }, []); // Removed dependencies on handlers
+  }, []); // No dependencies needed
 
 
   // Determine current display state
@@ -99,17 +140,21 @@ function OutputDisplay({ processedData, isLoading, error }) {
       {/* Results Display Area */}
       {!isLoading && !error && hasResults && (
         <div className="space-y-4">
+          {/* --- Pass kanji_details_map to renderFurigana --- */}
           {processedData.map((sentence, index) => (
             <div key={index} className="p-4 border border-stone-300/50 rounded-md bg-white/80 shadow-sm">
               <p className="text-2xl mb-2 text-stone-800 leading-relaxed">
-                {renderFurigana(sentence.furigana_html || sentence.original)}
+                {/* Pass the map for the current sentence */}
+                {renderFurigana(sentence.furigana_html || sentence.original_sentence, sentence.kanji_details_map)}
               </p>
               <p className="text-lg text-stone-700 italic mt-1">
                 {sentence.translation || '[No Translation Provided]'}
               </p>
+               {/* Display sentence-level processing error if any */}
                {sentence.error && <p className="text-xs text-red-500 mt-1">Processing Error: {sentence.error}</p>}
             </div>
           ))}
+          {/* --- End map update --- */}
         </div>
       )}
 
@@ -118,29 +163,26 @@ function OutputDisplay({ processedData, isLoading, error }) {
          <p className="text-stone-500">Enter text above and click "Process Text" to see results.</p>
       )}
 
-      {/* --- Removed the custom Tooltip component rendering --- */}
-
-      {/* --- CSS for hover effect & furigana positioning --- */}
+      {/* CSS for hover effect & furigana positioning */}
       <style jsx global>{`
         .kanji-hover {
-          cursor: pointer; /* Restore pointer cursor */
-          transition: background-color 0.2s ease-in-out; /* Smooth transition */
-          /* Optional: Add slight padding/margin if needed for highlight visibility */
-          /* padding: 0 1px; */
-          /* border-radius: 2px; */ /* Optional rounded corners for highlight */
+          cursor: pointer;
+          transition: background-color 0.2s ease-in-out;
         }
         .kanji-hover:hover {
-           background-color: rgba(255, 235, 59, 0.5); /* Restore yellow highlight on hover */
+           background-color: rgba(255, 235, 59, 0.5);
         }
         rt {
             font-size: 0.7em;
-            /* --- Add relative positioning to nudge furigana up slightly --- */
             position: relative;
-            bottom: 3.5px; /* Adjust this value (e.g., 1px, 2px, 0.5px) if needed */
-            /* --- End positioning adjustment --- */
+            bottom: 3.5px; /* Adjusted value from user */
+        }
+        /* Basic styling for Tippy content if needed */
+        .tippy-box[data-theme~='light'] {
+          /* Example customization */
+          /* color: #333; */
         }
       `}</style>
-      {/* --- End CSS --- */}
     </section>
   );
 }
