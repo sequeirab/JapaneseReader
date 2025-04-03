@@ -1,7 +1,7 @@
-// backend/server.js (Using Jisho API)
+// backend/server.js (Using Kuroshiro Segmentation & Jisho API)
 
 require('dotenv').config();
-const express = require('express');
+const express = 'express';
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const cors = require('cors');
 const { Pool } = require('pg');
@@ -13,10 +13,10 @@ const { OAuth2Client } = require('google-auth-library');
 
 const Kuroshiro = require('kuroshiro').default;
 const KuromojiAnalyzer = require('kuroshiro-analyzer-kuromoji');
-const kuromoji = require('kuromoji');
-const JishoApi = require('unofficial-jisho-api'); // Import Jisho API wrapper
+// Removed direct kuromoji import
+const JishoApi = require('unofficial-jisho-api');
 
-const jisho = new JishoApi(); // Create an instance of the Jisho API wrapper
+const jisho = new JishoApi();
 
 // --- Initialize DB Pool ---
 const pool = new Pool({
@@ -48,50 +48,38 @@ if (!GOOGLE_CLIENT_ID) {
     console.error("FATAL ERROR: GOOGLE_CLIENT_ID environment variable is not set.");
 }
 
-// --- Initialize Kuroshiro (only for utility functions) ---
+// --- Initialize Kuroshiro (Now used for tokenization too) ---
 let kuroshiro;
 let isKuroshiroReady = false;
 async function initializeKuroshiro() {
     try {
         kuroshiro = new Kuroshiro();
+        // Analyzer is needed for Kuroshiro's convert method
         const analyzer = new KuromojiAnalyzer({ dictPath: 'node_modules/kuromoji/dict' });
+        console.log("⏳ Initializing Kuroshiro (and its internal Kuromoji)...");
         await kuroshiro.init(analyzer);
         isKuroshiroReady = true;
-        console.log("✅ Kuroshiro initialized successfully (for utils).");
+        console.log("✅ Kuroshiro initialized successfully.");
     } catch (kuroshiroError) {
         console.error("❌ Error initializing Kuroshiro:", kuroshiroError);
         kuroshiro = null;
     }
 }
 
-// --- Initialize Kuromoji Tokenizer ---
-let kuromojiTokenizer;
-let isKuromojiReady = false;
-function initializeKuromoji() {
-    console.log("⏳ Initializing Kuromoji tokenizer...");
-    return new Promise((resolve, reject) => {
-        kuromoji.builder({ dicPath: "node_modules/kuromoji/dict" })
-            .build((err, tokenizer) => {
-                if (err) {
-                    console.error("❌ Error building Kuromoji tokenizer:", err);
-                    kuromojiTokenizer = null;
-                    isKuromojiReady = false;
-                    reject(err);
-                } else {
-                    kuromojiTokenizer = tokenizer;
-                    isKuromojiReady = true;
-                    console.log("✅ Kuromoji tokenizer initialized successfully.");
-                    resolve();
-                }
-            });
-    });
-}
+// --- Remove Kuromoji Tokenizer Initialization ---
+// let kuromojiTokenizer;
+// let isKuromojiReady = false;
+// function initializeKuromoji() { ... }
 
-// Initialize Kuroshiro and Kuromoji concurrently
-Promise.all([initializeKuroshiro(), initializeKuromoji()]).then(() => {
-    console.log("✅✅ All language processors initialized.");
+// Initialize only Kuroshiro now
+initializeKuroshiro().then(() => {
+     if(isKuroshiroReady) {
+        console.log("✅✅ Kuroshiro language processor initialized.");
+     } else {
+        console.error("⚠️ Kuroshiro initialization failed.");
+     }
 }).catch(err => {
-    console.error("❌ Error during initialization:", err);
+    console.error("❌ Error during Kuroshiro initialization:", err);
 });
 
 
@@ -133,7 +121,7 @@ app.get('/', (req, res) => {
   res.send('Hello from the Japanese Processor Backend! 👋');
 });
 
-// --- Text Processing Endpoint (Using Jisho API) ---
+// --- Text Processing Endpoint (Using Kuroshiro Segmentation) ---
 app.post('/api/process-text', async (req, res) => {
   console.log('Received request to /api/process-text');
 
@@ -141,11 +129,11 @@ app.post('/api/process-text', async (req, res) => {
   if (!model || !apiKey) {
      return res.status(500).json({ error: "Internal Server Error: AI model not configured." });
   }
-  if (!isKuromojiReady || !kuromojiTokenizer) {
-     console.error("Kuromoji tokenizer not ready.");
-     return res.status(500).json({ error: "Internal Server Error: Tokenizer not ready." });
+  // Check only Kuroshiro readiness now
+  if (!isKuroshiroReady || !kuroshiro) {
+     console.error("Kuroshiro not ready.");
+     return res.status(500).json({ error: "Internal Server Error: Language processor not ready." });
   }
-  // Kuroshiro readiness check removed from critical path (only affects Hiragana conversion)
 
   const { text } = req.body;
   if (!text || typeof text !== 'string' || text.trim().length === 0) {
@@ -169,38 +157,37 @@ app.post('/api/process-text', async (req, res) => {
         let sentenceProcessingError = null;
 
         try {
-            // 2a. Tokenize the sentence using Kuromoji
-            const tokens = kuromojiTokenizer.tokenize(trimmedSentence);
+            // 2a. Tokenize using Kuroshiro's convert method in segmented mode
+            console.log("⏳ Tokenizing with Kuroshiro segmented mode...");
+            // Use 'hiragana' to get readings in hiragana directly
+            const tokens = await kuroshiro.convert(trimmedSentence, { mode: "segmented", to: "hiragana" });
+            console.log("Kuroshiro segmented tokens:", JSON.stringify(tokens, null, 2)); // Log structure for debugging
 
-            // 2b. Process each token
+            // 2b. Process each token returned by Kuroshiro
+            // **ASSUMPTION**: Kuroshiro returns [{ surface: '...', reading: '...' }, ...]
+            // Adjust property names if the console.log above shows a different structure
             for (const token of tokens) {
-                const surface = token.surface_form;
-                let reading = token.reading || null;
-                if (reading && kuroshiro) { // Convert reading if Kuroshiro is ready
-                    reading = Kuroshiro.Util.kanaToHiragana(reading);
-                } else if (reading) {
-                    console.warn(`Kuroshiro util not ready, keeping reading as: ${reading}`);
-                }
+                // --- Adapt variable names if needed based on logged structure ---
+                const surface = token.surface; // Assuming 'surface' field exists
+                const reading = token.reading; // Assuming 'reading' field exists (already Hiragana)
+                // --- End Adaptation ---
+
+                if (!surface) continue; // Skip if token has no surface form
 
                 const containsKanji = surface.split('').some(isKanji);
-                let kanjiDetails = {}; // Store details for unique Kanji in this token
+                let kanjiDetails = {};
 
                 if (containsKanji) {
                     const uniqueKanjiInToken = [...new Set(surface.split('').filter(isKanji))];
-
-                    // Look up details using Jisho API (async)
                     for (const char of uniqueKanjiInToken) {
                         try {
-                            // Use Jisho API wrapper - this is an async network call
                             console.log(`Looking up Kanji '${char}' via Jisho API...`);
                             const result = await jisho.searchForKanji(char);
-
-                            // Check the structure of the result based on unofficial-jisho-api docs
                             if (result && result.found && result.data) {
                                 const data = result.data;
                                 kanjiDetails[char] = {
-                                    uri: result.uri, // Link to Jisho page
-                                    meanings: data.meaning ? data.meaning.split(', ') : [], // Jisho meanings are often comma-separated string
+                                    uri: result.uri,
+                                    meanings: data.meaning ? data.meaning.split(', ') : [],
                                     readings_on: data.onyomi || [],
                                     readings_kun: data.kunyomi || [],
                                     stroke_count: data.stroke_count || null,
@@ -208,29 +195,28 @@ app.post('/api/process-text', async (req, res) => {
                                     jlpt: data.jlpt || null,
                                     newspaper_frequency: data.newspaper_frequency || null,
                                     taught_in: data.taught_in || null,
-                                    // Add radical, parts if needed and available in data
                                     radical: data.radical ? data.radical.symbol : null,
                                 };
                                 console.log(`Found details for Kanji '${char}'`);
                             } else {
                                 console.warn(`Kanji '${char}' not found via Jisho API.`);
-                                kanjiDetails[char] = null; // Indicate not found
+                                kanjiDetails[char] = null;
                             }
                         } catch (lookupErr) {
-                            // Handle potential network errors or API errors
                             console.error(`Error looking up Kanji '${char}' with Jisho API:`, lookupErr);
                             kanjiDetails[char] = { error: 'Jisho API lookup failed' };
                         }
-                    } // End Kanji char loop
-                } // End if containsKanji
+                    }
+                }
 
                 // Add segment to the results
                 segments.push({
                     text: surface,
                     is_kanji_token: containsKanji,
-                    furigana: (reading && reading !== surface) ? reading : null,
+                    furigana: (reading && reading !== surface) ? reading : null, // Reading is already Hiragana
                     kanji_details: Object.keys(kanjiDetails).length > 0 ? kanjiDetails : null,
-                    pos: token.pos || null,
+                    // Optional: Add part_of_speech if Kuroshiro provides it in segmented mode
+                    // pos: token.pos || null, // Example if 'pos' field exists
                 });
             } // End token loop
 
@@ -252,7 +238,6 @@ app.post('/api/process-text', async (req, res) => {
             }
 
         } catch (processingError) {
-            // Catch errors from token processing or Jisho API lookup logic
             console.error('Error processing sentence segments:', trimmedSentence, processingError);
             sentenceProcessingError = processingError.message || "Segment processing failed";
              if (segments.length === 0) {
