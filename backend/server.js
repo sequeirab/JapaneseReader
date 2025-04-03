@@ -1,4 +1,4 @@
-// backend/server.js (Using kanji.js & direct Kuromoji)
+// backend/server.js (Using Jisho API)
 
 require('dotenv').config();
 const express = require('express');
@@ -12,16 +12,17 @@ const rateLimit = require('express-rate-limit');
 const { OAuth2Client } = require('google-auth-library');
 
 const Kuroshiro = require('kuroshiro').default;
-const KuromojiAnalyzer = require('kuroshiro-analyzer-kuromoji'); // Still needed for Kuroshiro init
-const kanji = require('kanji.js'); // Import kanji.js library
-const kuromoji = require('kuromoji'); // Import kuromoji directly
+const KuromojiAnalyzer = require('kuroshiro-analyzer-kuromoji');
+const kuromoji = require('kuromoji');
+const JishoApi = require('unofficial-jisho-api'); // Import Jisho API wrapper
+
+const jisho = new JishoApi(); // Create an instance of the Jisho API wrapper
 
 // --- Initialize DB Pool ---
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // ssl: { rejectUnauthorized: false } // Add if needed
+  // ssl: { rejectUnauthorized: false }
 });
-
 pool.query('SELECT NOW()', (err, res) => {
   if (err) { console.error('❌ Database connection error:', err.stack); }
   else { console.log('✅ Database connection successful.'); }
@@ -47,15 +48,12 @@ if (!GOOGLE_CLIENT_ID) {
     console.error("FATAL ERROR: GOOGLE_CLIENT_ID environment variable is not set.");
 }
 
-// --- Initialize Kuroshiro (only for utility functions now) ---
+// --- Initialize Kuroshiro (only for utility functions) ---
 let kuroshiro;
 let isKuroshiroReady = false;
 async function initializeKuroshiro() {
-    // We still init Kuroshiro to use its utility functions like kanaToHiragana
-    // but we don't strictly need its analyzer instance for tokenization anymore.
     try {
         kuroshiro = new Kuroshiro();
-        // Need to pass an analyzer instance even if we don't use its methods directly
         const analyzer = new KuromojiAnalyzer({ dictPath: 'node_modules/kuromoji/dict' });
         await kuroshiro.init(analyzer);
         isKuroshiroReady = true;
@@ -91,7 +89,7 @@ function initializeKuromoji() {
 
 // Initialize Kuroshiro and Kuromoji concurrently
 Promise.all([initializeKuroshiro(), initializeKuromoji()]).then(() => {
-    console.log("✅✅ All language processors initialized (Kuroshiro utils, Kuromoji tokenizer).");
+    console.log("✅✅ All language processors initialized.");
 }).catch(err => {
     console.error("❌ Error during initialization:", err);
 });
@@ -100,7 +98,6 @@ Promise.all([initializeKuroshiro(), initializeKuromoji()]).then(() => {
 // --- Express App Setup ---
 const app = express();
 const port = process.env.PORT || 3001;
-
 app.use(helmet());
 const allowedOrigins = [
   'https://japanesereader.netlify.app',
@@ -132,12 +129,11 @@ app.use(express.json());
 const isKanji = (char) => /[\u4E00-\u9FAF\u3400-\u4DBF]/.test(char);
 
 // --- API Endpoints ---
-
 app.get('/', (req, res) => {
   res.send('Hello from the Japanese Processor Backend! 👋');
 });
 
-// --- Text Processing Endpoint (Using direct Kuromoji) ---
+// --- Text Processing Endpoint (Using Jisho API) ---
 app.post('/api/process-text', async (req, res) => {
   console.log('Received request to /api/process-text');
 
@@ -145,17 +141,11 @@ app.post('/api/process-text', async (req, res) => {
   if (!model || !apiKey) {
      return res.status(500).json({ error: "Internal Server Error: AI model not configured." });
   }
-  // Check if Kuromoji tokenizer is ready
   if (!isKuromojiReady || !kuromojiTokenizer) {
      console.error("Kuromoji tokenizer not ready.");
      return res.status(500).json({ error: "Internal Server Error: Tokenizer not ready." });
   }
-   // Check if Kuroshiro utils are ready (optional, only needed for kanaToHiragana)
-   if (!isKuroshiroReady || !kuroshiro) {
-     console.warn("Kuroshiro utils not ready, readings might be in Katakana.");
-     // Allow processing to continue, but readings might be Katakana
-   }
-
+  // Kuroshiro readiness check removed from critical path (only affects Hiragana conversion)
 
   const { text } = req.body;
   if (!text || typeof text !== 'string' || text.trim().length === 0) {
@@ -179,19 +169,16 @@ app.post('/api/process-text', async (req, res) => {
         let sentenceProcessingError = null;
 
         try {
-            // 2a. Tokenize the sentence using the direct Kuromoji tokenizer
-            // Note: kuromoji.tokenize is synchronous
+            // 2a. Tokenize the sentence using Kuromoji
             const tokens = kuromojiTokenizer.tokenize(trimmedSentence);
 
             // 2b. Process each token
             for (const token of tokens) {
                 const surface = token.surface_form;
-                // Use reading from Kuromoji token, convert to Hiragana using Kuroshiro util if available
                 let reading = token.reading || null;
-                if (reading && kuroshiro) { // Check if kuroshiro is ready
+                if (reading && kuroshiro) { // Convert reading if Kuroshiro is ready
                     reading = Kuroshiro.Util.kanaToHiragana(reading);
                 } else if (reading) {
-                    // If kuroshiro isn't ready, reading might be Katakana
                     console.warn(`Kuroshiro util not ready, keeping reading as: ${reading}`);
                 }
 
@@ -200,28 +187,42 @@ app.post('/api/process-text', async (req, res) => {
 
                 if (containsKanji) {
                     const uniqueKanjiInToken = [...new Set(surface.split('').filter(isKanji))];
+
+                    // Look up details using Jisho API (async)
                     for (const char of uniqueKanjiInToken) {
                         try {
-                            const lookupResult = kanji.find(char);
-                            if (lookupResult && typeof lookupResult === 'object') {
+                            // Use Jisho API wrapper - this is an async network call
+                            console.log(`Looking up Kanji '${char}' via Jisho API...`);
+                            const result = await jisho.searchForKanji(char);
+
+                            // Check the structure of the result based on unofficial-jisho-api docs
+                            if (result && result.found && result.data) {
+                                const data = result.data;
                                 kanjiDetails[char] = {
-                                    meanings: lookupResult.meaning ? lookupResult.meaning.split(',') : (lookupResult.meanings || []),
-                                    readings_on: lookupResult.onyomi || [],
-                                    readings_kun: lookupResult.kunyomi || [],
-                                    stroke_count: lookupResult.stroke_count || null,
-                                    grade: lookupResult.grade || null,
-                                    jlpt: lookupResult.jlpt || null,
+                                    uri: result.uri, // Link to Jisho page
+                                    meanings: data.meaning ? data.meaning.split(', ') : [], // Jisho meanings are often comma-separated string
+                                    readings_on: data.onyomi || [],
+                                    readings_kun: data.kunyomi || [],
+                                    stroke_count: data.stroke_count || null,
+                                    grade: data.grade || null,
+                                    jlpt: data.jlpt || null,
+                                    newspaper_frequency: data.newspaper_frequency || null,
+                                    taught_in: data.taught_in || null,
+                                    // Add radical, parts if needed and available in data
+                                    radical: data.radical ? data.radical.symbol : null,
                                 };
+                                console.log(`Found details for Kanji '${char}'`);
                             } else {
-                                console.warn(`Kanji '${char}' not found or invalid result from kanji.js.`);
-                                kanjiDetails[char] = null;
+                                console.warn(`Kanji '${char}' not found via Jisho API.`);
+                                kanjiDetails[char] = null; // Indicate not found
                             }
                         } catch (lookupErr) {
-                            console.error(`Error looking up Kanji '${char}' with kanji.js:`, lookupErr);
-                            kanjiDetails[char] = { error: 'Lookup failed' };
+                            // Handle potential network errors or API errors
+                            console.error(`Error looking up Kanji '${char}' with Jisho API:`, lookupErr);
+                            kanjiDetails[char] = { error: 'Jisho API lookup failed' };
                         }
-                    }
-                }
+                    } // End Kanji char loop
+                } // End if containsKanji
 
                 // Add segment to the results
                 segments.push({
@@ -229,8 +230,7 @@ app.post('/api/process-text', async (req, res) => {
                     is_kanji_token: containsKanji,
                     furigana: (reading && reading !== surface) ? reading : null,
                     kanji_details: Object.keys(kanjiDetails).length > 0 ? kanjiDetails : null,
-                    // Optional: Add part_of_speech: token.pos, etc. from Kuromoji if needed
-                    pos: token.pos || null, // Example: adding part of speech
+                    pos: token.pos || null,
                 });
             } // End token loop
 
@@ -252,10 +252,9 @@ app.post('/api/process-text', async (req, res) => {
             }
 
         } catch (processingError) {
-            // Catch errors from token processing or kanji lookup
+            // Catch errors from token processing or Jisho API lookup logic
             console.error('Error processing sentence segments:', trimmedSentence, processingError);
             sentenceProcessingError = processingError.message || "Segment processing failed";
-            // Ensure segments array isn't completely empty if error occurred mid-processing
              if (segments.length === 0) {
                  segments.push({ text: trimmedSentence, is_kanji_token: false, furigana: null, kanji_details: null, error: sentenceProcessingError });
              }
