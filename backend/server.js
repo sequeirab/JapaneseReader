@@ -1,9 +1,7 @@
-// backend/server.js (Using Kuroshiro Segmentation & Jisho API)
+// backend/server.js (Attempting kuroshiro.analyzer.tokenize)
 
 require('dotenv').config();
-// --- FIX: Correctly require the express library ---
 const express = require('express');
-// --- END FIX ---
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const cors = require('cors');
 const { Pool } = require('pg');
@@ -15,6 +13,7 @@ const { OAuth2Client } = require('google-auth-library');
 
 const Kuroshiro = require('kuroshiro').default;
 const KuromojiAnalyzer = require('kuroshiro-analyzer-kuromoji');
+// Removed direct kuromoji import
 const JishoApi = require('unofficial-jisho-api');
 
 const jisho = new JishoApi();
@@ -49,25 +48,33 @@ if (!GOOGLE_CLIENT_ID) {
     console.error("FATAL ERROR: GOOGLE_CLIENT_ID environment variable is not set.");
 }
 
-// --- Initialize Kuroshiro (Now used for tokenization too) ---
+// --- Initialize Kuroshiro (Hoping analyzer is accessible after init) ---
 let kuroshiro;
 let isKuroshiroReady = false;
 async function initializeKuroshiro() {
     try {
         kuroshiro = new Kuroshiro();
-        // Analyzer is needed for Kuroshiro's convert method
+        // Create analyzer instance
         const analyzer = new KuromojiAnalyzer({ dictPath: 'node_modules/kuromoji/dict' });
         console.log("⏳ Initializing Kuroshiro (and its internal Kuromoji)...");
+        // Initialize Kuroshiro WITH the analyzer
         await kuroshiro.init(analyzer);
+        // Now, kuroshiro *might* have a reference to the initialized analyzer
         isKuroshiroReady = true;
         console.log("✅ Kuroshiro initialized successfully.");
+        // Optional: Check if analyzer seems accessible now
+        if (kuroshiro.analyzer && typeof kuroshiro.analyzer.tokenize === 'function') {
+             console.log("✅ Tokenizer seems accessible via kuroshiro.analyzer.tokenize");
+        } else {
+             console.warn("⚠️ Tokenizer might NOT be accessible via kuroshiro.analyzer.tokenize");
+        }
     } catch (kuroshiroError) {
         console.error("❌ Error initializing Kuroshiro:", kuroshiroError);
         kuroshiro = null;
     }
 }
 
-// Initialize only Kuroshiro now
+// Initialize Kuroshiro
 initializeKuroshiro().then(() => {
      if(isKuroshiroReady) {
         console.log("✅✅ Kuroshiro language processor initialized.");
@@ -80,7 +87,7 @@ initializeKuroshiro().then(() => {
 
 
 // --- Express App Setup ---
-const app = express(); // This line should now work correctly
+const app = express();
 const port = process.env.PORT || 3001;
 app.use(helmet());
 const allowedOrigins = [
@@ -117,7 +124,7 @@ app.get('/', (req, res) => {
   res.send('Hello from the Japanese Processor Backend! 👋');
 });
 
-// --- Text Processing Endpoint (Using Kuroshiro Segmentation) ---
+// --- Text Processing Endpoint (Trying kuroshiro.analyzer.tokenize) ---
 app.post('/api/process-text', async (req, res) => {
   console.log('Received request to /api/process-text');
 
@@ -125,7 +132,7 @@ app.post('/api/process-text', async (req, res) => {
   if (!model || !apiKey) {
      return res.status(500).json({ error: "Internal Server Error: AI model not configured." });
   }
-  // Check only Kuroshiro readiness now
+  // Check Kuroshiro readiness
   if (!isKuroshiroReady || !kuroshiro) {
      console.error("Kuroshiro not ready.");
      return res.status(500).json({ error: "Internal Server Error: Language processor not ready." });
@@ -153,22 +160,29 @@ app.post('/api/process-text', async (req, res) => {
         let sentenceProcessingError = null;
 
         try {
-            // 2a. Tokenize using Kuroshiro's convert method in segmented mode
-            console.log("⏳ Tokenizing with Kuroshiro segmented mode...");
-            // Use 'hiragana' to get readings in hiragana directly
-            const tokens = await kuroshiro.convert(trimmedSentence, { mode: "segmented", to: "hiragana" });
-            console.log("Kuroshiro segmented tokens:", JSON.stringify(tokens, null, 2)); // Log structure for debugging
+            // 2a. Tokenize using the analyzer potentially attached to kuroshiro instance
+            console.log("⏳ Attempting tokenization via kuroshiro.analyzer.tokenize...");
 
-            // 2b. Process each token returned by Kuroshiro
-            // **ASSUMPTION**: Kuroshiro returns [{ surface: '...', reading: '...' }, ...]
-            // Adjust property names if the console.log above shows a different structure
+            // --- Add check before attempting to call ---
+            if (!kuroshiro.analyzer || typeof kuroshiro.analyzer.tokenize !== 'function') {
+                console.error("Error: Tokenizer function not found at kuroshiro.analyzer.tokenize");
+                throw new Error("Tokenizer function not available via kuroshiro.analyzer");
+            }
+            // --- End check ---
+
+            // Call tokenize (Kuromoji's tokenize is sync, but use await just in case wrapper makes it async)
+            const tokens = await kuroshiro.analyzer.tokenize(trimmedSentence);
+            console.log("Tokens received:", JSON.stringify(tokens, null, 2)); // Log structure
+
+            // 2b. Process each token
             for (const token of tokens) {
-                // --- Adapt variable names if needed based on logged structure ---
-                const surface = token.surface; // Assuming 'surface' field exists
-                const reading = token.reading; // Assuming 'reading' field exists (already Hiragana)
-                // --- End Adaptation ---
+                const surface = token.surface_form; // Assuming Kuromoji token structure
+                let reading = token.reading || null;
+                if (reading) { // Convert reading if needed (already checked kuroshiro readiness)
+                    reading = Kuroshiro.Util.kanaToHiragana(reading);
+                }
 
-                if (!surface) continue; // Skip if token has no surface form
+                if (!surface) continue;
 
                 const containsKanji = surface.split('').some(isKanji);
                 let kanjiDetails = {};
@@ -209,10 +223,9 @@ app.post('/api/process-text', async (req, res) => {
                 segments.push({
                     text: surface,
                     is_kanji_token: containsKanji,
-                    furigana: (reading && reading !== surface) ? reading : null, // Reading is already Hiragana
+                    furigana: (reading && reading !== surface) ? reading : null,
                     kanji_details: Object.keys(kanjiDetails).length > 0 ? kanjiDetails : null,
-                    // Optional: Add part_of_speech if Kuroshiro provides it in segmented mode
-                    // pos: token.pos || null, // Example if 'pos' field exists
+                    pos: token.pos || null, // Assuming Kuromoji token structure
                 });
             } // End token loop
 
