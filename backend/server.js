@@ -1,7 +1,9 @@
 // backend/server.js (Using Kuroshiro Segmentation & Jisho API)
 
 require('dotenv').config();
-const express = 'express';
+// --- FIX: Correctly require the express library ---
+const express = require('express');
+// --- END FIX ---
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const cors = require('cors');
 const { Pool } = require('pg');
@@ -13,7 +15,6 @@ const { OAuth2Client } = require('google-auth-library');
 
 const Kuroshiro = require('kuroshiro').default;
 const KuromojiAnalyzer = require('kuroshiro-analyzer-kuromoji');
-// Removed direct kuromoji import
 const JishoApi = require('unofficial-jisho-api');
 
 const jisho = new JishoApi();
@@ -66,11 +67,6 @@ async function initializeKuroshiro() {
     }
 }
 
-// --- Remove Kuromoji Tokenizer Initialization ---
-// let kuromojiTokenizer;
-// let isKuromojiReady = false;
-// function initializeKuromoji() { ... }
-
 // Initialize only Kuroshiro now
 initializeKuroshiro().then(() => {
      if(isKuroshiroReady) {
@@ -84,7 +80,7 @@ initializeKuroshiro().then(() => {
 
 
 // --- Express App Setup ---
-const app = express();
+const app = express(); // This line should now work correctly
 const port = process.env.PORT || 3001;
 app.use(helmet());
 const allowedOrigins = [
