@@ -1,0 +1,67 @@
+body {
+    /* --- Subtle Mt. Fuji Background --- */
+    /* Replace with an actual URL to a subtle SVG/image */
+    /* Find royalty-free SVGs/images on sites like Unsplash, Pexels, SVGRepo, etc. */
+    /* background-image: url('https://example.com/path/to/your/fuji_silhouette.svg'); */
+  
+    background-color: #FFFBF5; /* Your existing light background */
+    background-repeat: no-repeat;
+    background-position: bottom right; /* Position it e.g., bottom right */
+    background-size: 15% auto; /* Make it relatively small */
+    background-attachment: fixed; /* Keep it fixed during scroll */
+  
+    /* Apply low opacity directly to the background image is tricky,
+       often better to use a pseudo-element or ensure the image itself is subtle/low-contrast */
+  
+    /* --- Ensure overall font --- */
+    font-family: 'Inter', sans-serif; /* Or your preferred font */
+  }
+  
+  
+  /* --- Custom Tippy.js Tooltip Theme --- */
+  /* Target the main tooltip box */
+  .tippy-box {
+    background-color: #2D3748; /* Darker background (Tailwind gray-800) */
+    color: #E2E8F0; /* Lighter text (Tailwind gray-200) */
+    border-radius: 6px; /* Slightly larger rounding */
+    border: 1px solid #4A5568; /* Subtle border (Tailwind gray-600) */
+    font-size: 0.9rem; /* Slightly larger base font */
+    line-height: 1.4; /* Adjust line spacing */
+    font-family: 'Inter', sans-serif; /* Consistent font */
+  }
+  
+  /* Target the content area inside the tooltip for padding */
+  .tippy-content {
+    padding: 8px 12px; /* Adjust padding */
+  }
+  
+  /* Style the arrow */
+  .tippy-arrow {
+    color: #2D3748; /* Match the background color */
+  }
+  
+  /* Style links inside the tooltip */
+  .tippy-content a {
+    color: #63B3ED; /* Lighter blue (Tailwind blue-400) */
+  }
+  .tippy-content a:hover {
+    color: #4299E1; /* Slightly darker blue on hover (Tailwind blue-500) */
+  }
+  
+  /* Style the elements inside our custom KanjiTooltipContent component */
+  .tippy-content h4 { /* The Kanji character */
+    color: #FFF;
+    margin-bottom: 0.4rem;
+  }
+  .tippy-content p { /* Meanings and Readings */
+    margin-bottom: 0.3rem;
+  }
+  .tippy-content strong { /* Labels like "Meanings:", "On:", "Kun:" */
+     color: #A0AEC0; /* Medium gray (Tailwind gray-500) */
+     margin-right: 0.3em;
+  }
+  .tippy-content .text-xs { /* JLPT, Grade etc. */
+     color: #718096; /* Darker gray (Tailwind gray-600) */
+  }
+  
+  

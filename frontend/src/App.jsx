@@ -5,6 +5,7 @@ import TextInput from './components/TextInput';
 import OutputDisplay from './components/OutputDisplay';
 import AuthForms from './components/AuthForms';
 
+
 // Removed direct imports for LoginForm/RegisterForm as they are now used within AuthForms
 
 // --- Configuration ---
@@ -161,7 +162,7 @@ function App() {
 
   // --- Render Logic ---
   return (
-    <div className="min-h-screen bg-orange-50 text-stone-800 font-sans p-4 sm:p-8 flex flex-col items-center">
+    <div className="min-h-screen text-stone-800 font-sans p-4 sm:p-8 flex flex-col items-center">
       <Header />
 
       {/* Conditionally render Auth forms or Main App */}
@@ -209,7 +210,7 @@ function App() {
       )}
 
        <footer className="mt-8 text-center text-stone-500 text-sm">
-         Created with React & Gemini
+         Created with React
        </footer>
     </div>
   );

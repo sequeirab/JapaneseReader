@@ -1,54 +1,90 @@
 // src/components/OutputDisplay.jsx
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react'; // Added useState
 import Tippy from '@tippyjs/react';
 import 'tippy.js/dist/tippy.css'; // Import default Tippy CSS styles
 // import 'tippy.js/themes/light.css'; // Optional theme
 
-// --- Updated Component to render SIMPLIFIED Kanji details ---
+// --- Component to render formatted Kanji details with expandable readings ---
 function KanjiTooltipContent({ details, kanjiChar }) {
+  // State to track if readings lists are expanded
+  const [onExpanded, setOnExpanded] = useState(false);
+  const [kunExpanded, setKunExpanded] = useState(false);
+
   if (!details) {
     return `No details found for ${kanjiChar}.`;
   }
   if (details.error) {
-    return `Error looking up ${kanjiChar}: ${details.error}`;
+    return `Error: ${details.error}`;
   }
 
-  // Helper to join readings array, handling potential undefined/empty arrays
-  // Limit to max 2 readings for simplicity
-  const formatReadings = (readings) => (readings && readings.length > 0 ? readings.slice(0, 2).join(', ') : 'N/A');
   // Limit meanings to max 3
   const formatMeanings = (meanings) => (meanings && meanings.length > 0 ? meanings.slice(0, 3).join(', ') : 'N/A');
 
+  // Constants for reading display
+  const INITIAL_READINGS_COUNT = 2;
+  const onReadings = details.readings_on || [];
+  const kunReadings = details.readings_kun || [];
+
+  // Determine if expansion buttons are needed
+  const showOnExpand = onReadings.length > INITIAL_READINGS_COUNT;
+  const showKunExpand = kunReadings.length > INITIAL_READINGS_COUNT;
+
+  // Get readings to display based on expanded state
+  const displayedOnReadings = onExpanded ? onReadings : onReadings.slice(0, INITIAL_READINGS_COUNT);
+  const displayedKunReadings = kunExpanded ? kunReadings : kunReadings.slice(0, INITIAL_READINGS_COUNT);
+
+  // Click handlers for expansion
+  const toggleOn = (e) => {
+      e.stopPropagation(); // Prevent tooltip from closing if interactive
+      setOnExpanded(!onExpanded);
+  }
+   const toggleKun = (e) => {
+      e.stopPropagation();
+      setKunExpanded(!kunExpanded);
+  }
+
+  // Helper span for the expand/collapse links
+  const Expander = ({ onClick, isExpanded }) => (
+    <span
+      onClick={onClick}
+      className="text-blue-400 hover:text-blue-300 cursor-pointer ml-1"
+      title={isExpanded ? "Show less" : "Show more"}
+    >
+      {isExpanded ? ' [-]' : ' [+]'}
+      {/* Or use text: {isExpanded ? ' less' : ' ...more'} */}
+    </span>
+  );
 
   return (
-    <div className="text-left p-1 max-w-xs"> {/* Basic tooltip styling */}
-      <h4 className="font-bold text-lg mb-1">{kanjiChar}</h4>
+    <div className="text-left max-w-xs">
+      <h4 className="font-bold text-xl mb-1">{kanjiChar}</h4>
       {details.meanings && details.meanings.length > 0 && (
-        // Show only first few meanings
         <p className="text-sm mb-1"><strong>Meanings:</strong> {formatMeanings(details.meanings)}</p>
       )}
-      <p className="text-sm mb-1">
-        {/* Show only first few readings */}
-        <strong>On:</strong> {formatReadings(details.readings_on)}
-        <strong className="ml-3">Kun:</strong> {formatReadings(details.readings_kun)}
-      </p>
-      <div className="text-xs text-gray-300 mt-1">
-        {/* Removed Stroke Count */}
-        {/* {details.stroke_count && <span>Strokes: {details.stroke_count}</span>} */}
-        {/* Removed Radical */}
-        {/* {details.radical && <span className="ml-2">Radical: {details.radical}</span>} */}
+      {/* Readings Section */}
+      <div className="text-sm mb-1">
+        <div>
+            <strong>On:</strong> {displayedOnReadings.join(', ') || 'N/A'}
+            {showOnExpand && <Expander onClick={toggleOn} isExpanded={onExpanded} />}
+        </div>
+        <div className="mt-1"> {/* Add some space between On and Kun */}
+            <strong>Kun:</strong> {displayedKunReadings.join(', ') || 'N/A'}
+            {showKunExpand && <Expander onClick={toggleKun} isExpanded={kunExpanded} />}
+        </div>
+      </div>
+      {/* Other Details Section */}
+      <div className="text-xs mt-2">
         {details.jlpt && <span>JLPT: {details.jlpt}</span>}
         {details.grade && <span className="ml-2">Grade: {details.grade}</span>}
       </div>
-       {/* Keep Link to Jisho page */}
        {details.uri && (
             <a
                 href={details.uri}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs text-blue-400 hover:text-blue-300 mt-1 block"
+                className="text-sm text-blue-400 hover:text-blue-300 hover:underline mt-2 block"
             >
-                View on Jisho.org
+                View on Jisho.org →
             </a>
         )}
     </div>
@@ -88,9 +124,8 @@ function OutputDisplay({ processedData, isLoading, error }) {
               allowHTML={true}
               placement="bottom"
               animation="fade"
-              duration={200}
-              interactive={true}
-              // theme="light"
+              duration={[100, 100]}
+              interactive={true} // Keep interactive true to allow clicking inside
             >
               <span className="kanji-hover">
                 {char}
@@ -162,26 +197,80 @@ function OutputDisplay({ processedData, isLoading, error }) {
          <p className="text-stone-500">Enter text above and click "Process Text" to see results.</p>
       )}
 
-      {/* CSS for hover effect & furigana positioning */}
+      {/* --- Enhanced Tooltip Styles --- */}
       <style jsx global>{`
         .kanji-hover {
           cursor: pointer;
           transition: background-color 0.2s ease-in-out;
+          border-radius: 2px;
+          padding: 0 1px;
+          margin: 0 1px;
         }
         .kanji-hover:hover {
-           background-color: rgba(255, 235, 59, 0.5);
+           background-color: rgba(255, 235, 59, 0.6);
         }
         rt {
             font-size: 0.7em;
             position: relative;
-            bottom: 3.5px; /* Adjusted value from user */
+            bottom: 3.5px;
         }
-        /* Basic styling for Tippy content if needed */
-        .tippy-box[data-theme~='light'] {
-          /* Example customization */
-          /* color: #333; */
+
+        /* --- Custom Tippy.js Tooltip Theme --- */
+        .tippy-box {
+          background-color: #334155; /* Tailwind slate-800 */
+          color: #cbd5e1; /* Tailwind slate-300 */
+          border-radius: 6px;
+          border-top: 2px solid #F97316; /* Tailwind orange-600 */
+          border: none;
+          font-size: 0.9rem;
+          line-height: 1.4;
+          font-family: 'Inter', sans-serif;
+          box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
         }
+        .tippy-content {
+          padding: 10px 14px;
+        }
+        .tippy-arrow {
+          color: #334155;
+        }
+        .tippy-content h4 {
+          color: #FFF;
+          margin-bottom: 0.5rem;
+          font-size: 1.25rem;
+        }
+        .tippy-content p {
+          margin-bottom: 0.4rem;
+          color: #e2e8f0;
+        }
+        .tippy-content strong {
+           color: #94a3b8;
+           font-weight: 600;
+           margin-right: 0.4em;
+        }
+        .tippy-content .text-xs {
+           color: #94a3b8;
+           display: block;
+           margin-top: 0.5rem;
+        }
+        .tippy-content a {
+          color: #60a5fa;
+          font-weight: 500;
+        }
+        .tippy-content a:hover {
+          color: #3b82f6;
+        }
+        /* Style for the expander */
+        .tippy-content .text-blue-400 {
+            color: #60a5fa; /* Ensure color applies */
+        }
+         .tippy-content .hover\\:text-blue-300:hover {
+             color: #93c5fd; /* Ensure hover color applies */
+         }
+         .tippy-content .cursor-pointer {
+             cursor: pointer;
+         }
       `}</style>
+      {/* --- End Enhanced Tooltip Styles --- */}
     </section>
   );
 }
