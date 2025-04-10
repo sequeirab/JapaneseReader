@@ -1,57 +1,31 @@
 // src/components/OutputDisplay.jsx
-import React, { useCallback, useState } from 'react'; // Added useState
+// (Modified to add onClick handler to Kanji spans)
+import React, { useCallback, useState } from 'react';
 import Tippy from '@tippyjs/react';
-import 'tippy.js/dist/tippy.css'; // Import default Tippy CSS styles
-// import 'tippy.js/themes/light.css'; // Optional theme
+import 'tippy.js/dist/tippy.css';
 
-// --- Component to render formatted Kanji details with expandable readings ---
+// --- KanjiTooltipContent (Displays content *inside* the hover tooltip) ---
+// (This remains the same as before, included for completeness)
 function KanjiTooltipContent({ details, kanjiChar }) {
-  // State to track if readings lists are expanded
   const [onExpanded, setOnExpanded] = useState(false);
   const [kunExpanded, setKunExpanded] = useState(false);
 
-  if (!details) {
-    return `No details found for ${kanjiChar}.`;
-  }
-  if (details.error) {
-    return `Error: ${details.error}`;
-  }
+  if (!details) return `Loading...`;
+  if (details.error) return `Error: ${details.error}`;
 
-  // Limit meanings to max 3
   const formatMeanings = (meanings) => (meanings && meanings.length > 0 ? meanings.slice(0, 3).join(', ') : 'N/A');
-
-  // Constants for reading display
   const INITIAL_READINGS_COUNT = 2;
   const onReadings = details.readings_on || [];
   const kunReadings = details.readings_kun || [];
-
-  // Determine if expansion buttons are needed
   const showOnExpand = onReadings.length > INITIAL_READINGS_COUNT;
   const showKunExpand = kunReadings.length > INITIAL_READINGS_COUNT;
-
-  // Get readings to display based on expanded state
   const displayedOnReadings = onExpanded ? onReadings : onReadings.slice(0, INITIAL_READINGS_COUNT);
   const displayedKunReadings = kunExpanded ? kunReadings : kunReadings.slice(0, INITIAL_READINGS_COUNT);
-
-  // Click handlers for expansion
-  const toggleOn = (e) => {
-      e.stopPropagation(); // Prevent tooltip from closing if interactive
-      setOnExpanded(!onExpanded);
-  }
-   const toggleKun = (e) => {
-      e.stopPropagation();
-      setKunExpanded(!kunExpanded);
-  }
-
-  // Helper span for the expand/collapse links
+  const toggleOn = (e) => { e.stopPropagation(); setOnExpanded(!onExpanded); }
+  const toggleKun = (e) => { e.stopPropagation(); setKunExpanded(!kunExpanded); }
   const Expander = ({ onClick, isExpanded }) => (
-    <span
-      onClick={onClick}
-      className="text-blue-400 hover:text-blue-300 cursor-pointer ml-1"
-      title={isExpanded ? "Show less" : "Show more"}
-    >
+    <span onClick={onClick} className="text-blue-400 hover:text-blue-300 cursor-pointer ml-1" title={isExpanded ? "Show less" : "Show more"}>
       {isExpanded ? ' [-]' : ' [+]'}
-      {/* Or use text: {isExpanded ? ' less' : ' ...more'} */}
     </span>
   );
 
@@ -61,102 +35,118 @@ function KanjiTooltipContent({ details, kanjiChar }) {
       {details.meanings && details.meanings.length > 0 && (
         <p className="text-sm mb-1"><strong>Meanings:</strong> {formatMeanings(details.meanings)}</p>
       )}
-      {/* Readings Section */}
       <div className="text-sm mb-1">
         <div>
             <strong>On:</strong> {displayedOnReadings.join(', ') || 'N/A'}
             {showOnExpand && <Expander onClick={toggleOn} isExpanded={onExpanded} />}
         </div>
-        <div className="mt-1"> {/* Add some space between On and Kun */}
+        <div className="mt-1">
             <strong>Kun:</strong> {displayedKunReadings.join(', ') || 'N/A'}
             {showKunExpand && <Expander onClick={toggleKun} isExpanded={kunExpanded} />}
         </div>
       </div>
-      {/* Other Details Section */}
       <div className="text-xs mt-2">
         {details.jlpt && <span>JLPT: {details.jlpt}</span>}
         {details.grade && <span className="ml-2">Grade: {details.grade}</span>}
       </div>
        {details.uri && (
-            <a
-                href={details.uri}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-blue-400 hover:text-blue-300 hover:underline mt-2 block"
-            >
+            <a href={details.uri} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-400 hover:text-blue-300 hover:underline mt-2 block">
                 View on Jisho.org →
             </a>
         )}
     </div>
   );
 }
+// --- End KanjiTooltipContent ---
 
 
-// --- Main OutputDisplay Component (No changes needed here) ---
-function OutputDisplay({ processedData, isLoading, error }) {
+// --- Main OutputDisplay Component ---
+// Added handleKanjiClick prop
+function OutputDisplay({ processedData, isLoading, error, handleKanjiClick }) {
 
+  // Modified renderFurigana to include onClick handler on the Kanji span
   const renderFurigana = useCallback((htmlString, kanjiDetailsMap) => {
-    if (!htmlString) return null;
+    if (!htmlString) return null; // Return null if no HTML string is provided
 
+    // Regular expression to identify Kanji characters
     const kanjiRegex = /[\u4E00-\u9FAF\u3400-\u4DBF]/;
+    // Regular expression to find <ruby> tags generated by Kuroshiro
+    // It captures the base text (group 1) and the ruby text (group 2)
     const rubyRegex = /<ruby>([^<]+)(?:<rp>.*?<\/rp>)?<rt>(.*?)<\/rt>(?:<rp>.*?<\/rp>)?<\/ruby>/gs;
 
-    const parts = [];
-    let lastIndex = 0;
-    let match;
+    const parts = []; // Array to hold React elements and strings
+    let lastIndex = 0; // Keep track of the end position of the last match
+    let match; // Variable to hold the result of regex execution
 
+    // Loop through all <ruby> tags found in the htmlString
     while ((match = rubyRegex.exec(htmlString)) !== null) {
+      // Add the text segment before the current <ruby> tag, if any
       if (match.index > lastIndex) {
         parts.push(htmlString.substring(lastIndex, match.index));
       }
 
-      const baseText = match[1];
-      const rubyText = match[2];
+      const baseText = match[1]; // The text inside <ruby> (e.g., "今日")
+      const rubyText = match[2]; // The text inside <rt> (e.g., "きょう")
 
+      // Process the base text character by character
       const baseElements = baseText.split('').map((char, index) => {
+        // Check if the character is a Kanji
         if (kanjiRegex.test(char)) {
+          // Get the details for this specific Kanji from the map passed down
           const details = kanjiDetailsMap ? kanjiDetailsMap[char] : null;
 
+          // Wrap the Kanji character in a Tippy component for the hover tooltip
+          // AND a span with an onClick handler for the modal
           return (
             <Tippy
-              key={`${match.index}-base-${index}-tippy`}
-              content={<KanjiTooltipContent details={details} kanjiChar={char} />}
-              allowHTML={true}
-              placement="bottom"
-              animation="fade"
-              duration={[100, 100]}
-              interactive={true} // Keep interactive true to allow clicking inside
+              key={`${match.index}-base-${index}-tippy`} // Unique key for React
+              content={<KanjiTooltipContent details={details} kanjiChar={char} />} // Content for the tooltip
+              allowHTML={true} // Allow HTML in tooltip content
+              placement="bottom" // Tooltip position
+              animation="fade" // Tooltip animation
+              duration={[100, 100]} // Show/hide duration
+              interactive={true} // Allow interaction (clicking links) within the tooltip
             >
-              <span className="kanji-hover">
-                {char}
+              {/* This span wraps the Kanji visually and handles the CLICK */}
+              <span
+                className="kanji-hover" // Class for hover styling (defined in CSS)
+                onClick={() => handleKanjiClick(char, details)} // *** ADDED onClick handler ***
+                                                               // Calls the function passed from App.jsx
+              >
+                {char} {/* The Kanji character itself */}
               </span>
             </Tippy>
           );
         } else {
+          // If it's not a Kanji, just return the character as is
           return char;
         }
       });
 
+      // Add the reconstructed <ruby> element with interactive Kanji spans
       parts.push(
-        <ruby key={match.index}>
-          {baseElements}
-          <rt>{rubyText}</rt>
+        <ruby key={match.index}> {/* Unique key for React */}
+          {baseElements} {/* The base text, potentially with wrapped Kanji */}
+          <rt>{rubyText}</rt> {/* The furigana reading */}
         </ruby>
       );
 
+      // Update lastIndex to the end of the current match
       lastIndex = rubyRegex.lastIndex;
     }
 
+    // Add any remaining text after the last <ruby> tag
     if (lastIndex < htmlString.length) {
       parts.push(htmlString.substring(lastIndex));
     }
 
+    // Return the array of elements/strings, or the original string if no ruby tags were found
     return parts.length > 0 ? parts : [htmlString];
 
-  }, []);
+  }, [handleKanjiClick]); // Add handleKanjiClick as a dependency for useCallback
 
 
-  // Determine current display state
+  // Determine current display state (loading, error, results, or initial)
   const hasResults = processedData && processedData.length > 0;
   const showInitialMessage = !isLoading && !error && !hasResults;
 
@@ -178,14 +168,18 @@ function OutputDisplay({ processedData, isLoading, error }) {
       {/* Results Display Area */}
       {!isLoading && !error && hasResults && (
         <div className="space-y-4">
+          {/* Map over each processed sentence */}
           {processedData.map((sentence, index) => (
             <div key={index} className="p-4 border border-stone-300/50 rounded-md bg-white/80 shadow-sm">
+              {/* Render the sentence with Furigana and interactive Kanji */}
               <p className="text-2xl mb-2 text-stone-800 leading-relaxed">
                 {renderFurigana(sentence.furigana_html || sentence.original_sentence, sentence.kanji_details_map)}
               </p>
+              {/* Display the English translation */}
               <p className="text-lg text-stone-700 italic mt-1">
                 {sentence.translation || '[No Translation Provided]'}
               </p>
+              {/* Display any sentence-specific processing errors */}
                {sentence.error && <p className="text-xs text-red-500 mt-1">Processing Error: {sentence.error}</p>}
             </div>
           ))}
@@ -197,7 +191,7 @@ function OutputDisplay({ processedData, isLoading, error }) {
          <p className="text-stone-500">Enter text above and click "Process Text" to see results.</p>
       )}
 
-      {/* --- Enhanced Tooltip Styles --- */}
+      {/* --- Enhanced Tooltip & Ruby Styles (Keep existing styles) --- */}
       <style jsx global>{`
         .kanji-hover {
           cursor: pointer;
@@ -207,70 +201,32 @@ function OutputDisplay({ processedData, isLoading, error }) {
           margin: 0 1px;
         }
         .kanji-hover:hover {
-           background-color: rgba(255, 235, 59, 0.6);
+           background-color: rgba(255, 235, 59, 0.6); /* Yellow highlight on hover */
         }
-        rt {
+        rt { /* Style for the furigana text */
             font-size: 0.7em;
             position: relative;
-            bottom: 3.5px;
+            bottom: 3.5px; /* Adjust vertical position */
         }
-
-        /* --- Custom Tippy.js Tooltip Theme --- */
+        /* --- Custom Tippy.js Tooltip Theme (Keep existing styles) --- */
         .tippy-box {
-          background-color: #334155; /* Tailwind slate-800 */
-          color: #cbd5e1; /* Tailwind slate-300 */
-          border-radius: 6px;
-          border-top: 2px solid #F97316; /* Tailwind orange-600 */
-          border: none;
-          font-size: 0.9rem;
-          line-height: 1.4;
-          font-family: 'Inter', sans-serif;
+          background-color: #334155; color: #cbd5e1; border-radius: 6px;
+          border-top: 2px solid #F97316; border: none; font-size: 0.9rem;
+          line-height: 1.4; font-family: 'Inter', sans-serif;
           box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
         }
-        .tippy-content {
-          padding: 10px 14px;
-        }
-        .tippy-arrow {
-          color: #334155;
-        }
-        .tippy-content h4 {
-          color: #FFF;
-          margin-bottom: 0.5rem;
-          font-size: 1.25rem;
-        }
-        .tippy-content p {
-          margin-bottom: 0.4rem;
-          color: #e2e8f0;
-        }
-        .tippy-content strong {
-           color: #94a3b8;
-           font-weight: 600;
-           margin-right: 0.4em;
-        }
-        .tippy-content .text-xs {
-           color: #94a3b8;
-           display: block;
-           margin-top: 0.5rem;
-        }
-        .tippy-content a {
-          color: #60a5fa;
-          font-weight: 500;
-        }
-        .tippy-content a:hover {
-          color: #3b82f6;
-        }
-        /* Style for the expander */
-        .tippy-content .text-blue-400 {
-            color: #60a5fa; /* Ensure color applies */
-        }
-         .tippy-content .hover\\:text-blue-300:hover {
-             color: #93c5fd; /* Ensure hover color applies */
-         }
-         .tippy-content .cursor-pointer {
-             cursor: pointer;
-         }
+        .tippy-content { padding: 10px 14px; }
+        .tippy-arrow { color: #334155; }
+        .tippy-content h4 { color: #FFF; margin-bottom: 0.5rem; font-size: 1.25rem; }
+        .tippy-content p { margin-bottom: 0.4rem; color: #e2e8f0; }
+        .tippy-content strong { color: #94a3b8; font-weight: 600; margin-right: 0.4em; }
+        .tippy-content .text-xs { color: #94a3b8; display: block; margin-top: 0.5rem; }
+        .tippy-content a { color: #60a5fa; font-weight: 500; }
+        .tippy-content a:hover { color: #3b82f6; }
+        .tippy-content .text-blue-400 { color: #60a5fa; }
+        .tippy-content .hover\\:text-blue-300:hover { color: #93c5fd; }
+        .tippy-content .cursor-pointer { cursor: pointer; }
       `}</style>
-      {/* --- End Enhanced Tooltip Styles --- */}
     </section>
   );
 }
