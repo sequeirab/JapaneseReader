@@ -16,6 +16,8 @@ const KuromojiAnalyzer = require('kuroshiro-analyzer-kuromoji');
 const JishoApi = require('unofficial-jisho-api');
 const wanakana = require('wanakana'); // Import wanakana
 
+const { supermemo } = require('supermemo');
+
 const jisho = new JishoApi();
 
 // --- Initialize DB Pool ---
@@ -100,7 +102,8 @@ const corsOptions = {
       callback(new Error('Not allowed by CORS'));
     }
   },
-  optionsSuccessStatus: 200
+  optionsSuccessStatus: 200,
+  allowedHeaders: ['Content-Type', 'Authorization'],
 };
 app.use(cors(corsOptions));
 const limiter = rateLimit({
@@ -116,13 +119,42 @@ app.use(express.json());
 // --- Helper Function ---
 const isKanji = (char) => /[\u4E00-\u9FAF\u3400-\u4DBF]/.test(char);
 
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+
+  if (token == null) {
+      console.log('Auth Error: No token provided');
+      return res.sendStatus(401); // Unauthorized
+  }
+
+  const jwtSecret = process.env.JWT_SECRET;
+  if (!jwtSecret) {
+      console.error("FATAL ERROR: JWT_SECRET environment variable is not set.");
+      return res.status(500).json({ error: "Server configuration error." });
+  }
+
+  jwt.verify(token, jwtSecret, (err, user) => {
+    if (err) {
+        console.log("JWT Verification Error:", err.message);
+        return res.sendStatus(403); // Forbidden (invalid/expired token)
+    }
+    if (!user || !user.userId) { // Make sure payload has expected data
+        console.error("JWT payload missing userId");
+        return res.sendStatus(403); // Forbidden (malformed payload)
+    }
+    req.user = user; // Attach user payload to request
+    next(); // Proceed to the next middleware or route handler
+  });
+};
+
 // --- API Endpoints ---
 app.get('/', (req, res) => {
   res.send('Hello from the Japanese Processor Backend! 👋');
 });
 
 // --- Text Processing Endpoint (Simplified - No Tokenizer) ---
-app.post('/api/process-text', async (req, res) => {
+app.post('/api/process-text', authenticateToken, async (req, res) => {
   console.log('Received request to /api/process-text');
 
   // Check readiness
@@ -391,6 +423,63 @@ app.post('/auth/google', async (req, res) => {
       } else {
            res.status(500).json({ error: 'Google Sign-In failed.' });
       }
+  }
+});
+
+app.post('/api/srs/review/:kanji', authenticateToken, async (req, res) => {
+  // req.user is guaranteed to exist here if middleware passed
+  const userId = req.user.userId;
+  const kanji = req.params.kanji;
+  const { grade } = req.body;
+
+  // Validate grade
+  if (grade === undefined || typeof grade !== 'number' || grade < 0 || grade > 5) {
+    return res.status(400).json({ error: 'Invalid review grade provided (must be 0-5).' });
+  }
+  // Validate Kanji
+  if (typeof kanji !== 'string' || kanji.length !== 1 || !isKanji(kanji)) {
+      return res.status(400).json({ error: 'Invalid Kanji character provided.' });
+  }
+
+  try {
+    // Fetch current SRS data
+    const currentSrsData = await pool.query(
+      'SELECT interval, repetition, efactor FROM user_kanji_srs WHERE user_id = $1 AND kanji_character = $2',
+      [userId, kanji]
+    );
+
+    // Initialize or parse item data
+    let item = (currentSrsData.rows.length === 0)
+      ? { interval: 0, repetition: 0, efactor: 2.5 } // Defaults for first review
+      : {
+          interval: parseFloat(currentSrsData.rows[0].interval) || 0,
+          repetition: parseInt(currentSrsData.rows[0].repetition, 10) || 0,
+          efactor: parseFloat(currentSrsData.rows[0].efactor) || 2.5
+        };
+
+    // Calculate next state using supermemo library
+    const updatedSrs = supermemo(item, grade);
+
+    // Calculate next due date
+    const now = new Date();
+    const nextDueDate = new Date(now);
+    nextDueDate.setDate(now.getDate() + updatedSrs.interval);
+
+    // Update database (UPSERT)
+    const upsertQuery = `
+      INSERT INTO user_kanji_srs (user_id, kanji_character, interval, repetition, efactor, due_date, last_reviewed_at)
+      VALUES ($1, $2, $3, $4, $5, $6, NOW())
+      ON CONFLICT (user_id, kanji_character)
+      DO UPDATE SET interval = EXCLUDED.interval, repetition = EXCLUDED.repetition, efactor = EXCLUDED.efactor, due_date = EXCLUDED.due_date, last_reviewed_at = NOW(), updated_at = NOW();
+    `;
+    await pool.query(upsertQuery, [ userId, kanji, updatedSrs.interval, updatedSrs.repetition, updatedSrs.efactor, nextDueDate ]);
+
+    console.log(`SRS updated for ${kanji} (User ${userId}): Grade=${grade}, Interval=${updatedSrs.interval}, EFactor=${updatedSrs.efactor.toFixed(2)}, Due=${nextDueDate.toISOString().split('T')[0]}`);
+    res.status(200).json({ message: 'Review recorded successfully.' });
+
+  } catch (error) {
+    console.error(`Error processing review for ${kanji} (User ${userId}):`, error);
+    res.status(500).json({ error: 'Failed to process review.' });
   }
 });
 
