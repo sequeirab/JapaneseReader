@@ -483,6 +483,48 @@ app.post('/api/srs/review/:kanji', authenticateToken, async (req, res) => {
   }
 });
 
+app.post('/api/srs/add', authenticateToken, async (req, res) => {
+  const userId = req.user.userId; // Get user ID from authenticated token
+  const { kanji } = req.body; // Get Kanji character from request body
+
+  // Validate input
+  if (!kanji || typeof kanji !== 'string' || kanji.length !== 1 || !isKanji(kanji)) {
+      return res.status(400).json({ error: 'Invalid Kanji character provided.' });
+  }
+
+  try {
+      // Attempt to insert the Kanji for the user with default SRS values.
+      // ON CONFLICT DO NOTHING: If the user already has this Kanji in their
+      // SRS list (violating the primary key constraint), do nothing and
+      // still return success (as the desired state is achieved).
+      const insertQuery = `
+          INSERT INTO user_kanji_srs
+            (user_id, kanji_character, interval, repetition, efactor, due_date, last_reviewed_at, created_at, updated_at)
+          VALUES
+            ($1, $2, 0, 0, 2.5, NOW(), NULL, NOW(), NOW())
+          ON CONFLICT (user_id, kanji_character)
+          DO NOTHING;
+      `;
+      const result = await pool.query(insertQuery, [userId, kanji]);
+
+      // Check if a row was actually inserted (result.rowCount === 1) or if conflict occurred (rowCount === 0)
+      if (result.rowCount === 1) {
+          console.log(`Kanji '${kanji}' added to SRS for user ${userId}`);
+          res.status(201).json({ message: `Kanji '${kanji}' added to your review queue.` });
+      } else {
+          console.log(`Kanji '${kanji}' already exists in SRS for user ${userId}. No action taken.`);
+          res.status(200).json({ message: `Kanji '${kanji}' is already in your review queue.` });
+      }
+
+  } catch (error) {
+      console.error(`Error adding Kanji '${kanji}' to SRS for user ${userId}:`, error);
+      // Handle potential foreign key constraint errors if user_id doesn't exist (though middleware should prevent this)
+      if (error.code === '23503') { // foreign_key_violation
+           return res.status(404).json({ error: 'User not found.' });
+      }
+      res.status(500).json({ error: 'Failed to add Kanji to review queue.' });
+  }
+});
 
 // --- Start the Server ---
 app.listen(port, () => {
