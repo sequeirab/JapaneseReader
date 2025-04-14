@@ -1,14 +1,11 @@
-// src/App.jsx
-// (Includes Kanji Modal, SRS Tester integration)
-// *** Standard Authentication Flow Restored - No Dev Bypass ***
-
 import React, { useState, useEffect } from 'react';
 import Header from './components/Header';
+import Navbar from './components/Navbar'; // Import Navbar
 import TextInput from './components/TextInput';
 import OutputDisplay from './components/OutputDisplay';
 import AuthForms from './components/AuthForms';
 import KanjiDetailsModal from './components/KanjiDetailsModal';
-import SrsReviewTester from './components/SrsReviewTester';
+import SrsReviewTester from './components/SrsReviewTester'; // Keep for now
 
 // --- Configuration ---
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
@@ -57,23 +54,15 @@ function App() {
   const [processedData, setProcessedData] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
-
-  // --- Authentication State (Standard Flow) ---
-  // Initialize authToken by reading from localStorage
   const [authToken, setAuthToken] = useState(() => localStorage.getItem('authToken'));
-  // Initialize currentUser to null; useEffect will set it based on the token
   const [currentUser, setCurrentUser] = useState(null);
-  // --- End Authentication State ---
-
   const [authError, setAuthError] = useState('');
   const [showLogin, setShowLogin] = useState(true);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
-
-  // --- Modal State ---
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedKanjiChar, setSelectedKanjiChar] = useState(null);
   const [selectedKanjiDetails, setSelectedKanjiDetails] = useState(null);
-  // --- End Modal State ---
+  const [activeView, setActiveView] = useState('reader');
 
   // --- Effects ---
   // Standard useEffect to sync currentUser with authToken
@@ -201,16 +190,16 @@ function App() {
     }
   };
 
-  // handleLogout (Restored standard version)
   const handleLogout = () => {
     localStorage.removeItem('authToken');
-    setAuthToken(null); // Clearing token triggers useEffect to clear user
-    // No need to set currentUser(null) directly here
+    setAuthToken(null);
     setProcessedData([]);
     setError(null);
     setAuthError('');
+    setActiveView('reader');
     console.log("User logged out");
   };
+
 
   // --- Modal Handlers (No changes needed) ---
   const handleKanjiClick = (kanjiChar, details) => {
@@ -235,35 +224,46 @@ function App() {
     <div className="min-h-screen text-stone-800 font-sans p-4 sm:p-8 flex flex-col items-center">
       <Header />
 
-      {/* Conditional rendering based on standard login status */}
       {isLoggedIn ? (
         // --- Logged-in View ---
-        <main className="w-full max-w-4xl bg-white/60 backdrop-blur-sm rounded-lg shadow-md p-6 mt-6 border border-stone-300/30">
-          {/* User Info & Logout */}
-          <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
-            <p className="text-sm text-stone-600">Logged in as: {currentUser.email}</p>
-            <button onClick={handleLogout} className="px-3 py-1 text-sm bg-red-500 hover:bg-red-600 text-white rounded shadow transition-colors">
-              Logout
-            </button>
-          </div>
-          {/* Text Input */}
-          <TextInput
-            inputText={inputText}
-            setInputText={setInputText}
-            handleProcessText={handleProcessText}
-            isLoading={isLoading}
+        <> {/* Use Fragment to group Navbar and Main content */}
+          <Navbar
+            activeView={activeView}
+            setActiveView={setActiveView}
+            handleLogout={handleLogout}
           />
-          <hr className="my-6 border-t border-stone-300" />
-          {/* Output Display */}
-          <OutputDisplay
-            processedData={processedData}
-            isLoading={isLoading}
-            error={error}
-            handleKanjiClick={handleKanjiClick}
-          />
-          {/* SRS Tester */}
-          <SrsReviewTester />
-        </main>
+          <main className="w-full max-w-4xl bg-white/60 backdrop-blur-sm rounded-lg shadow-md p-6 border border-stone-300/30">
+            {/* Conditionally render content based on activeView */}
+            {activeView === 'reader' && (
+              <>
+                {/* Text Input */}
+                <TextInput
+                  inputText={inputText}
+                  setInputText={setInputText}
+                  handleProcessText={handleProcessText}
+                  isLoading={isLoading}
+                />
+                <hr className="my-6 border-t border-stone-300" />
+                {/* Output Display */}
+                <OutputDisplay
+                  processedData={processedData}
+                  isLoading={isLoading}
+                  error={error}
+                  handleKanjiClick={handleKanjiClick}
+                />
+              </>
+            )}
+
+            {activeView === 'srs' && (
+              <>
+                <h2 className="text-xl font-semibold mb-4 text-stone-700">SRS Review Session</h2>
+                {/* Render the SRS Tester for now, replace later with real component */}
+                <SrsReviewTester />
+                {/* <SrsReviewSession />  <-- Future component */}
+              </>
+            )}
+          </main>
+        </>
       ) : (
         // --- Logged-out View ---
         <AuthForms
@@ -280,14 +280,14 @@ function App() {
         />
       )}
 
-      {/* Modal */}
+      {/* Modal (Keep existing) */}
       <KanjiDetailsModal
         isOpen={isModalOpen}
         onClose={handleCloseModal}
         kanjiChar={selectedKanjiChar}
         kanjiDetails={selectedKanjiDetails}
       />
-       {/* Footer */}
+       {/* Footer (Keep existing) */}
        <footer className="mt-8 text-center text-stone-500 text-sm">
          Created with React
        </footer>
