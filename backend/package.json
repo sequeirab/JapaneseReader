@@ -4,9 +4,6 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
     "start": "node server.js"
   },
   "keywords": [],
@@ -31,8 +28,5 @@
     "unofficial-jisho-api": "^2.3.4",
     "wanakana": "^5.3.1"
   },
-  "devDependencies": {
-    "jest": "^29.7.0",
-    "supertest": "^6.3.3"
-  }
+  "devDependencies": {}
 }
