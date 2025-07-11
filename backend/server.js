@@ -4,7 +4,7 @@ require('dotenv').config();
 const express = require('express');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const cors = require('cors');
-const { Pool } = require('pg');
+const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const helmet = require('helmet');
@@ -20,15 +20,54 @@ const { supermemo } = require('supermemo');
 
 const jisho = new JishoApi();
 
-// --- Initialize DB Pool ---
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  // ssl: { rejectUnauthorized: false }
+// --- Initialize SQLite DB ---
+const dbPath = process.env.DB_PATH || './japanese_reader.db';
+const db = new sqlite3.Database(dbPath, (err) => {
+  if (err) {
+    console.error('❌ Database connection error:', err.message);
+  } else {
+    console.log('✅ SQLite database connected successfully.');
+    initializeDatabase();
+  }
 });
-pool.query('SELECT NOW()', (err, res) => {
-  if (err) { console.error('❌ Database connection error:', err.stack); }
-  else { console.log('✅ Database connection successful.'); }
-});
+
+// --- Initialize Database Tables ---
+function initializeDatabase() {
+  // Create users table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT,
+      google_id TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `, (err) => {
+    if (err) console.error('Error creating users table:', err.message);
+    else console.log('✅ Users table ready.');
+  });
+
+  // Create user_kanji_srs table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS user_kanji_srs (
+      user_id INTEGER NOT NULL,
+      kanji_character TEXT NOT NULL,
+      interval REAL DEFAULT 0,
+      repetition INTEGER DEFAULT 0,
+      efactor REAL DEFAULT 2.5,
+      due_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_reviewed_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, kanji_character),
+      FOREIGN KEY (user_id) REFERENCES users (user_id)
+    )
+  `, (err) => {
+    if (err) console.error('Error creating user_kanji_srs table:', err.message);
+    else console.log('✅ SRS table ready.');
+  });
+}
 
 // --- Initialize Gemini Client ---
 const apiKey = process.env.GEMINI_API_KEY;
@@ -295,20 +334,27 @@ app.post('/auth/register', async (req, res) => {
     const saltRounds = 10;
     const passwordHash = await bcrypt.hash(password, saltRounds);
     const lowerCaseEmail = email.toLowerCase();
-    const newUserQuery = 'INSERT INTO users(email, password_hash) VALUES($1, $2) RETURNING user_id, email, created_at';
-    const values = [lowerCaseEmail, passwordHash];
-    const result = await pool.query(newUserQuery, values);
-    const newUser = result.rows[0];
-    console.log('User registered:', newUser.email);
-    res.status(201).json({
+    
+    const newUserQuery = 'INSERT INTO users(email, password_hash) VALUES(?, ?)';
+    
+    db.run(newUserQuery, [lowerCaseEmail, passwordHash], function(err) {
+      if (err) {
+        console.error('Registration error:', err);
+        if (err.message.includes('UNIQUE constraint failed')) {
+          return res.status(409).json({ error: 'Email already exists.' });
+        }
+        return res.status(500).json({ error: 'Registration failed.' });
+      }
+      
+      const userId = this.lastID;
+      console.log('User registered:', lowerCaseEmail);
+      res.status(201).json({
         message: 'User registered successfully!',
-        user: { userId: newUser.user_id, email: newUser.email }
+        user: { userId: userId, email: lowerCaseEmail }
+      });
     });
   } catch (error) {
     console.error('Registration error:', error);
-    if (error.code === '23505') {
-      return res.status(409).json({ error: 'Email already exists.' });
-    }
     res.status(500).json({ error: 'Registration failed.' });
   }
 });
@@ -324,23 +370,36 @@ app.post('/auth/login', async (req, res) => {
       return res.status(500).json({ error: "Server configuration error." });
   }
   try {
-    const findUserQuery = 'SELECT user_id, email, password_hash FROM users WHERE email = $1';
-    const result = await pool.query(findUserQuery, [email.toLowerCase()]);
-    const user = result.rows[0];
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid email or password.' });
-    }
-    const isMatch = await bcrypt.compare(password, user.password_hash);
-    if (!isMatch) {
-      return res.status(401).json({ error: 'Invalid email or password.' });
-    }
-    const payload = { userId: user.user_id, email: user.email };
-    const token = jwt.sign(payload, jwtSecret, { expiresIn: '1h' });
-    console.log('User logged in:', user.email);
-    res.status(200).json({
-        message: 'Login successful!',
-        token: token,
-        user: { userId: user.user_id, email: user.email }
+    const findUserQuery = 'SELECT user_id, email, password_hash FROM users WHERE email = ?';
+    
+    db.get(findUserQuery, [email.toLowerCase()], async (err, user) => {
+      if (err) {
+        console.error('Login error:', err);
+        return res.status(500).json({ error: 'Login failed.' });
+      }
+      
+      if (!user) {
+        return res.status(401).json({ error: 'Invalid email or password.' });
+      }
+      
+      try {
+        const isMatch = await bcrypt.compare(password, user.password_hash);
+        if (!isMatch) {
+          return res.status(401).json({ error: 'Invalid email or password.' });
+        }
+        
+        const payload = { userId: user.user_id, email: user.email };
+        const token = jwt.sign(payload, jwtSecret, { expiresIn: '1h' });
+        console.log('User logged in:', user.email);
+        res.status(200).json({
+            message: 'Login successful!',
+            token: token,
+            user: { userId: user.user_id, email: user.email }
+        });
+      } catch (bcryptError) {
+        console.error('Bcrypt error:', bcryptError);
+        res.status(500).json({ error: 'Login failed.' });
+      }
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -374,47 +433,95 @@ app.post('/auth/google', async (req, res) => {
       if (!email || !emailVerified) {
           return res.status(400).json({ error: "Google account email not verified." });
       }
-      let user;
-      let userId;
-      const findByGoogleIdQuery = 'SELECT user_id, email FROM users WHERE google_id = $1';
-      let result = await pool.query(findByGoogleIdQuery, [googleId]);
-      user = result.rows[0];
-      if (user) {
-          userId = user.user_id;
+      
+      const findByGoogleIdQuery = 'SELECT user_id, email FROM users WHERE google_id = ?';
+      
+      db.get(findByGoogleIdQuery, [googleId], (err, user) => {
+        if (err) {
+          console.error('Google Sign-In Error:', err);
+          return res.status(500).json({ error: 'Google Sign-In failed.' });
+        }
+        
+        if (user) {
+          // User found by Google ID
           console.log('Google Sign-In: User found by Google ID:', user.email);
-      } else {
-          const findByEmailQuery = 'SELECT user_id, email, google_id FROM users WHERE email = $1';
-          result = await pool.query(findByEmailQuery, [email.toLowerCase()]);
-          user = result.rows[0];
-          if (user) {
-              userId = user.user_id;
-              if (!user.google_id) {
-                  console.log('Google Sign-In: Found user by email, linking Google ID:', user.email);
-                  const linkGoogleIdQuery = 'UPDATE users SET google_id = $1 WHERE user_id = $2';
-                  await pool.query(linkGoogleIdQuery, [googleId, userId]);
-              } else {
-                  console.log('Google Sign-In: User found by email (Google ID already linked):', user.email);
-                  if (user.google_id !== googleId) {
-                      console.error(`Security Alert: Email ${email} trying to log in with different Google ID.`);
-                      return res.status(403).json({ error: "Account association mismatch." });
+          const appPayload = { userId: user.user_id, email: user.email };
+          const appToken = jwt.sign(appPayload, jwtSecret, { expiresIn: '1h' });
+          return res.status(200).json({
+              message: 'Google Sign-In successful!',
+              token: appToken,
+              user: { userId: user.user_id, email: user.email }
+          });
+        } else {
+          // Check if user exists by email
+          const findByEmailQuery = 'SELECT user_id, email, google_id FROM users WHERE email = ?';
+          
+          db.get(findByEmailQuery, [email.toLowerCase()], (err, existingUser) => {
+            if (err) {
+              console.error('Google Sign-In Error:', err);
+              return res.status(500).json({ error: 'Google Sign-In failed.' });
+            }
+            
+            if (existingUser) {
+              // User exists by email
+              if (!existingUser.google_id) {
+                // Link Google ID to existing user
+                console.log('Google Sign-In: Found user by email, linking Google ID:', existingUser.email);
+                const linkGoogleIdQuery = 'UPDATE users SET google_id = ? WHERE user_id = ?';
+                
+                db.run(linkGoogleIdQuery, [googleId, existingUser.user_id], (err) => {
+                  if (err) {
+                    console.error('Google Sign-In Error linking Google ID:', err);
+                    return res.status(500).json({ error: 'Google Sign-In failed.' });
                   }
+                  
+                  const appPayload = { userId: existingUser.user_id, email: existingUser.email };
+                  const appToken = jwt.sign(appPayload, jwtSecret, { expiresIn: '1h' });
+                  return res.status(200).json({
+                      message: 'Google Sign-In successful!',
+                      token: appToken,
+                      user: { userId: existingUser.user_id, email: existingUser.email }
+                  });
+                });
+              } else {
+                // Check for Google ID mismatch
+                if (existingUser.google_id !== googleId) {
+                  console.error(`Security Alert: Email ${email} trying to log in with different Google ID.`);
+                  return res.status(403).json({ error: "Account association mismatch." });
+                }
+                
+                const appPayload = { userId: existingUser.user_id, email: existingUser.email };
+                const appToken = jwt.sign(appPayload, jwtSecret, { expiresIn: '1h' });
+                return res.status(200).json({
+                    message: 'Google Sign-In successful!',
+                    token: appToken,
+                    user: { userId: existingUser.user_id, email: existingUser.email }
+                });
               }
-          } else {
+            } else {
+              // Create new user
               console.log('Google Sign-In: Creating new user for email:', email);
-              const createUserQuery = 'INSERT INTO users (email, google_id) VALUES ($1, $2) RETURNING user_id, email';
-              const values = [email.toLowerCase(), googleId];
-              result = await pool.query(createUserQuery, values);
-              user = result.rows[0];
-              userId = user.user_id;
-              console.log('Google Sign-In: New user created:', user.email);
-          }
-      }
-      const appPayload = { userId: userId, email: user.email };
-      const appToken = jwt.sign(appPayload, jwtSecret, { expiresIn: '1h' });
-      res.status(200).json({
-          message: 'Google Sign-In successful!',
-          token: appToken,
-          user: { userId: userId, email: user.email }
+              const createUserQuery = 'INSERT INTO users (email, google_id) VALUES (?, ?)';
+              
+              db.run(createUserQuery, [email.toLowerCase(), googleId], function(err) {
+                if (err) {
+                  console.error('Google Sign-In Error creating user:', err);
+                  return res.status(500).json({ error: 'Google Sign-In failed.' });
+                }
+                
+                const userId = this.lastID;
+                console.log('Google Sign-In: New user created:', email);
+                const appPayload = { userId: userId, email: email };
+                const appToken = jwt.sign(appPayload, jwtSecret, { expiresIn: '1h' });
+                return res.status(200).json({
+                    message: 'Google Sign-In successful!',
+                    token: appToken,
+                    user: { userId: userId, email: email }
+                });
+              });
+            }
+          });
+        }
       });
   } catch (error) {
       console.error('Google Sign-In Error:', error);
@@ -443,39 +550,65 @@ app.post('/api/srs/review/:kanji', authenticateToken, async (req, res) => {
 
   try {
     // Fetch current SRS data
-    const currentSrsData = await pool.query(
-      'SELECT interval, repetition, efactor FROM user_kanji_srs WHERE user_id = $1 AND kanji_character = $2',
-      [userId, kanji]
-    );
+    const currentSrsQuery = 'SELECT interval, repetition, efactor FROM user_kanji_srs WHERE user_id = ? AND kanji_character = ?';
+    
+    db.get(currentSrsQuery, [userId, kanji], (err, currentSrsData) => {
+      if (err) {
+        console.error(`Error fetching SRS data for ${kanji} (User ${userId}):`, err);
+        return res.status(500).json({ error: 'Failed to process review.' });
+      }
 
-    // Initialize or parse item data
-    let item = (currentSrsData.rows.length === 0)
-      ? { interval: 0, repetition: 0, efactor: 2.5 } // Defaults for first review
-      : {
-          interval: parseFloat(currentSrsData.rows[0].interval) || 0,
-          repetition: parseInt(currentSrsData.rows[0].repetition, 10) || 0,
-          efactor: parseFloat(currentSrsData.rows[0].efactor) || 2.5
-        };
+      // Initialize or parse item data
+      let item = !currentSrsData
+        ? { interval: 0, repetition: 0, efactor: 2.5 } // Defaults for first review
+        : {
+            interval: parseFloat(currentSrsData.interval) || 0,
+            repetition: parseInt(currentSrsData.repetition, 10) || 0,
+            efactor: parseFloat(currentSrsData.efactor) || 2.5
+          };
 
-    // Calculate next state using supermemo library
-    const updatedSrs = supermemo(item, grade);
+      // Calculate next state using supermemo library
+      const updatedSrs = supermemo(item, grade);
 
-    // Calculate next due date
-    const now = new Date();
-    const nextDueDate = new Date(now);
-    nextDueDate.setDate(now.getDate() + updatedSrs.interval);
+      // Calculate next due date
+      const now = new Date();
+      const nextDueDate = new Date(now);
+      nextDueDate.setDate(now.getDate() + updatedSrs.interval);
 
-    // Update database (UPSERT)
-    const upsertQuery = `
-      INSERT INTO user_kanji_srs (user_id, kanji_character, interval, repetition, efactor, due_date, last_reviewed_at)
-      VALUES ($1, $2, $3, $4, $5, $6, NOW())
-      ON CONFLICT (user_id, kanji_character)
-      DO UPDATE SET interval = EXCLUDED.interval, repetition = EXCLUDED.repetition, efactor = EXCLUDED.efactor, due_date = EXCLUDED.due_date, last_reviewed_at = NOW(), updated_at = NOW();
-    `;
-    await pool.query(upsertQuery, [ userId, kanji, updatedSrs.interval, updatedSrs.repetition, updatedSrs.efactor, nextDueDate ]);
-
-    console.log(`SRS updated for ${kanji} (User ${userId}): Grade=${grade}, Interval=${updatedSrs.interval}, EFactor=${updatedSrs.efactor.toFixed(2)}, Due=${nextDueDate.toISOString().split('T')[0]}`);
-    res.status(200).json({ message: 'Review recorded successfully.' });
+      // Update database (UPSERT equivalent for SQLite)
+      if (currentSrsData) {
+        // Update existing record
+        const updateQuery = `
+          UPDATE user_kanji_srs 
+          SET interval = ?, repetition = ?, efactor = ?, due_date = ?, last_reviewed_at = datetime('now'), updated_at = datetime('now')
+          WHERE user_id = ? AND kanji_character = ?
+        `;
+        db.run(updateQuery, [updatedSrs.interval, updatedSrs.repetition, updatedSrs.efactor, nextDueDate.toISOString(), userId, kanji], (err) => {
+          if (err) {
+            console.error(`Error updating SRS data for ${kanji} (User ${userId}):`, err);
+            return res.status(500).json({ error: 'Failed to process review.' });
+          }
+          
+          console.log(`SRS updated for ${kanji} (User ${userId}): Grade=${grade}, Interval=${updatedSrs.interval}, EFactor=${updatedSrs.efactor.toFixed(2)}, Due=${nextDueDate.toISOString().split('T')[0]}`);
+          res.status(200).json({ message: 'Review recorded successfully.' });
+        });
+      } else {
+        // Insert new record
+        const insertQuery = `
+          INSERT INTO user_kanji_srs (user_id, kanji_character, interval, repetition, efactor, due_date, last_reviewed_at, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))
+        `;
+        db.run(insertQuery, [userId, kanji, updatedSrs.interval, updatedSrs.repetition, updatedSrs.efactor, nextDueDate.toISOString()], (err) => {
+          if (err) {
+            console.error(`Error inserting SRS data for ${kanji} (User ${userId}):`, err);
+            return res.status(500).json({ error: 'Failed to process review.' });
+          }
+          
+          console.log(`SRS updated for ${kanji} (User ${userId}): Grade=${grade}, Interval=${updatedSrs.interval}, EFactor=${updatedSrs.efactor.toFixed(2)}, Due=${nextDueDate.toISOString().split('T')[0]}`);
+          res.status(200).json({ message: 'Review recorded successfully.' });
+        });
+      }
+    });
 
   } catch (error) {
     console.error(`Error processing review for ${kanji} (User ${userId}):`, error);
@@ -493,36 +626,190 @@ app.post('/api/srs/add', authenticateToken, async (req, res) => {
   }
 
   try {
-      // Attempt to insert the Kanji for the user with default SRS values.
-      // ON CONFLICT DO NOTHING: If the user already has this Kanji in their
-      // SRS list (violating the primary key constraint), do nothing and
-      // still return success (as the desired state is achieved).
-      const insertQuery = `
-          INSERT INTO user_kanji_srs
-            (user_id, kanji_character, interval, repetition, efactor, due_date, last_reviewed_at, created_at, updated_at)
-          VALUES
-            ($1, $2, 0, 0, 2.5, NOW(), NULL, NOW(), NOW())
-          ON CONFLICT (user_id, kanji_character)
-          DO NOTHING;
-      `;
-      const result = await pool.query(insertQuery, [userId, kanji]);
-
-      // Check if a row was actually inserted (result.rowCount === 1) or if conflict occurred (rowCount === 0)
-      if (result.rowCount === 1) {
-          console.log(`Kanji '${kanji}' added to SRS for user ${userId}`);
-          res.status(201).json({ message: `Kanji '${kanji}' added to your review queue.` });
-      } else {
+      // Check if the kanji already exists for this user
+      const checkQuery = 'SELECT 1 FROM user_kanji_srs WHERE user_id = ? AND kanji_character = ?';
+      
+      db.get(checkQuery, [userId, kanji], (err, existingRecord) => {
+        if (err) {
+          console.error(`Error checking existing Kanji '${kanji}' for user ${userId}:`, err);
+          return res.status(500).json({ error: 'Failed to add Kanji to review queue.' });
+        }
+        
+        if (existingRecord) {
           console.log(`Kanji '${kanji}' already exists in SRS for user ${userId}. No action taken.`);
-          res.status(200).json({ message: `Kanji '${kanji}' is already in your review queue.` });
-      }
+          return res.status(200).json({ message: `Kanji '${kanji}' is already in your review queue.` });
+        } else {
+          // Insert new record
+          const insertQuery = `
+            INSERT INTO user_kanji_srs
+              (user_id, kanji_character, interval, repetition, efactor, due_date, last_reviewed_at, created_at, updated_at)
+            VALUES
+              (?, ?, 0, 0, 2.5, datetime('now'), NULL, datetime('now'), datetime('now'))
+          `;
+          
+          db.run(insertQuery, [userId, kanji], function(err) {
+            if (err) {
+              console.error(`Error adding Kanji '${kanji}' to SRS for user ${userId}:`, err);
+              // Handle potential foreign key constraint errors
+              if (err.message.includes('FOREIGN KEY constraint failed')) {
+                return res.status(404).json({ error: 'User not found.' });
+              }
+              return res.status(500).json({ error: 'Failed to add Kanji to review queue.' });
+            }
+            
+            console.log(`Kanji '${kanji}' added to SRS for user ${userId}`);
+            res.status(201).json({ message: `Kanji '${kanji}' added to your review queue.` });
+          });
+        }
+      });
 
   } catch (error) {
       console.error(`Error adding Kanji '${kanji}' to SRS for user ${userId}:`, error);
-      // Handle potential foreign key constraint errors if user_id doesn't exist (though middleware should prevent this)
-      if (error.code === '23503') { // foreign_key_violation
-           return res.status(404).json({ error: 'User not found.' });
-      }
       res.status(500).json({ error: 'Failed to add Kanji to review queue.' });
+  }
+});
+
+app.get('/api/srs/due', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  
+  try {
+    const dueQuery = `
+      SELECT kanji_character, interval, repetition, efactor, due_date, last_reviewed_at, created_at
+      FROM user_kanji_srs 
+      WHERE user_id = ? AND due_date <= datetime('now')
+      ORDER BY due_date ASC
+    `;
+    
+    db.all(dueQuery, [userId], (err, dueCards) => {
+      if (err) {
+        console.error(`Error fetching due cards for user ${userId}:`, err);
+        return res.status(500).json({ error: 'Failed to fetch due cards.' });
+      }
+      
+      console.log(`Fetched ${dueCards.length} due cards for user ${userId}`);
+      res.status(200).json({ dueCards });
+    });
+  } catch (error) {
+    console.error(`Error fetching due cards for user ${userId}:`, error);
+    res.status(500).json({ error: 'Failed to fetch due cards.' });
+  }
+});
+
+app.get('/api/srs/stats', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  
+  try {
+    const statsQuery = `
+      SELECT 
+        COUNT(*) as total_cards,
+        COUNT(CASE WHEN due_date <= datetime('now') THEN 1 END) as due_today,
+        COUNT(CASE WHEN due_date <= datetime('now', '+1 day') THEN 1 END) as due_tomorrow,
+        COUNT(CASE WHEN due_date <= datetime('now', '+7 days') THEN 1 END) as due_this_week,
+        COUNT(CASE WHEN last_reviewed_at IS NOT NULL THEN 1 END) as reviewed_cards,
+        AVG(CASE WHEN last_reviewed_at IS NOT NULL THEN efactor END) as avg_efactor,
+        MAX(repetition) as max_repetition,
+        COUNT(CASE WHEN last_reviewed_at >= datetime('now', '-1 day') THEN 1 END) as reviewed_today
+      FROM user_kanji_srs 
+      WHERE user_id = ?
+    `;
+    
+    db.get(statsQuery, [userId], (err, stats) => {
+      if (err) {
+        console.error(`Error fetching stats for user ${userId}:`, err);
+        return res.status(500).json({ error: 'Failed to fetch statistics.' });
+      }
+      
+      console.log(`Fetched stats for user ${userId}`);
+      res.status(200).json({ 
+        stats: {
+          totalCards: stats.total_cards || 0,
+          dueToday: stats.due_today || 0,
+          dueTomorrow: stats.due_tomorrow || 0,
+          dueThisWeek: stats.due_this_week || 0,
+          reviewedCards: stats.reviewed_cards || 0,
+          avgEfactor: stats.avg_efactor ? parseFloat(stats.avg_efactor.toFixed(2)) : null,
+          maxRepetition: stats.max_repetition || 0,
+          reviewedToday: stats.reviewed_today || 0
+        }
+      });
+    });
+  } catch (error) {
+    console.error(`Error fetching stats for user ${userId}:`, error);
+    res.status(500).json({ error: 'Failed to fetch statistics.' });
+  }
+});
+
+app.get('/api/srs/queue', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const { sortBy = 'due_date', order = 'ASC', limit } = req.query;
+  
+  // Validate sort parameters
+  const validSortFields = ['due_date', 'created_at', 'last_reviewed_at', 'repetition', 'efactor', 'kanji_character'];
+  const validOrders = ['ASC', 'DESC'];
+  
+  if (!validSortFields.includes(sortBy) || !validOrders.includes(order.toUpperCase())) {
+    return res.status(400).json({ error: 'Invalid sort parameters.' });
+  }
+  
+  try {
+    let queueQuery = `
+      SELECT kanji_character, interval, repetition, efactor, due_date, last_reviewed_at, created_at
+      FROM user_kanji_srs 
+      WHERE user_id = ?
+      ORDER BY ${sortBy} ${order.toUpperCase()}
+    `;
+    
+    const queryParams = [userId];
+    
+    if (limit && !isNaN(parseInt(limit))) {
+      queueQuery += ' LIMIT ?';
+      queryParams.push(parseInt(limit));
+    }
+    
+    db.all(queueQuery, queryParams, (err, queue) => {
+      if (err) {
+        console.error(`Error fetching queue for user ${userId}:`, err);
+        return res.status(500).json({ error: 'Failed to fetch review queue.' });
+      }
+      
+      console.log(`Fetched ${queue.length} cards from queue for user ${userId}`);
+      res.status(200).json({ queue });
+    });
+  } catch (error) {
+    console.error(`Error fetching queue for user ${userId}:`, error);
+    res.status(500).json({ error: 'Failed to fetch review queue.' });
+  }
+});
+
+app.delete('/api/srs/remove/:kanji', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const kanji = req.params.kanji;
+  
+  // Validate Kanji
+  if (typeof kanji !== 'string' || kanji.length !== 1 || !isKanji(kanji)) {
+    return res.status(400).json({ error: 'Invalid Kanji character provided.' });
+  }
+  
+  try {
+    const deleteQuery = 'DELETE FROM user_kanji_srs WHERE user_id = ? AND kanji_character = ?';
+    
+    db.run(deleteQuery, [userId, kanji], function(err) {
+      if (err) {
+        console.error(`Error removing Kanji '${kanji}' for user ${userId}:`, err);
+        return res.status(500).json({ error: 'Failed to remove Kanji from review queue.' });
+      }
+      
+      if (this.changes === 0) {
+        console.log(`Kanji '${kanji}' not found in queue for user ${userId}`);
+        return res.status(404).json({ error: 'Kanji not found in your review queue.' });
+      }
+      
+      console.log(`Kanji '${kanji}' removed from SRS for user ${userId}`);
+      res.status(200).json({ message: `Kanji '${kanji}' removed from your review queue.` });
+    });
+  } catch (error) {
+    console.error(`Error removing Kanji '${kanji}' for user ${userId}:`, error);
+    res.status(500).json({ error: 'Failed to remove Kanji from review queue.' });
   }
 });
 

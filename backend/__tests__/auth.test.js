@@ -1,7 +1,6 @@
 const request = require('supertest');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { Pool } = require('pg');
 
 // Import the app (we need to export the app from server.js)
 // For testing purposes, let's assume we've modified server.js to export the app
@@ -61,39 +60,10 @@ try {
   });
 }
 
-// Mock the database pool
-const pool = new Pool();
-
 describe('Authentication Endpoints', () => {
   beforeEach(() => {
     // Reset mocks before each test
     jest.clearAllMocks();
-    
-    // Mock successful database queries
-    pool.query.mockImplementation((query, values) => {
-      if (query.includes('INSERT INTO users')) {
-        return Promise.resolve({
-          rows: [{ user_id: '123', email: values[0], created_at: new Date() }]
-        });
-      } else if (query.includes('SELECT user_id, email, password_hash FROM users')) {
-        return Promise.resolve({
-          rows: [{ 
-            user_id: '123', 
-            email: values[0], 
-            password_hash: bcrypt.hashSync('password123', 10) 
-          }]
-        });
-      } else if (query.includes('SELECT user_id, email FROM users WHERE google_id')) {
-        return Promise.resolve({ rows: [] });
-      } else if (query.includes('SELECT user_id, email, google_id FROM users WHERE email')) {
-        return Promise.resolve({ rows: [] });
-      } else if (query.includes('INSERT INTO users (email, google_id)')) {
-        return Promise.resolve({
-          rows: [{ user_id: '123', email: values[0] }]
-        });
-      }
-      return Promise.resolve({ rows: [] });
-    });
   });
 
   describe('POST /auth/register', () => {

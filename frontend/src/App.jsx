@@ -5,7 +5,9 @@ import TextInput from './components/TextInput';
 import OutputDisplay from './components/OutputDisplay';
 import AuthForms from './components/AuthForms';
 import KanjiDetailsModal from './components/KanjiDetailsModal';
-import SrsReviewTester from './components/SrsReviewTester'; // Keep for now
+import SrsReviewSession from './components/SrsReviewSession';
+import SrsDashboard from './components/SrsDashboard';
+import SrsQueueManager from './components/SrsQueueManager';
 
 // --- Configuration ---
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
@@ -63,6 +65,7 @@ function App() {
   const [selectedKanjiChar, setSelectedKanjiChar] = useState(null);
   const [selectedKanjiDetails, setSelectedKanjiDetails] = useState(null);
   const [activeView, setActiveView] = useState('reader');
+  const [srsView, setSrsView] = useState('dashboard');
 
   // --- Effects ---
   // Standard useEffect to sync currentUser with authToken
@@ -221,76 +224,177 @@ function App() {
 
   // --- Render Logic ---
   return (
-    <div className="min-h-screen text-stone-800 font-sans p-4 sm:p-8 flex flex-col items-center">
-      <Header />
+    <div className="min-h-screen relative overflow-hidden">
+      {/* Animated Japanese Background Elements */}
+      <div className="fixed inset-0 pointer-events-none">
+        <div className="absolute -top-10 -right-10 w-40 h-40 bg-gradient-to-br from-red-200/30 to-pink-200/30 rounded-full blur-3xl animate-pulse"></div>
+        <div className="absolute top-1/4 -left-20 w-60 h-60 bg-gradient-to-br from-blue-200/20 to-indigo-200/20 rounded-full blur-3xl animate-pulse delay-1000"></div>
+        <div className="absolute bottom-1/4 right-1/4 w-32 h-32 bg-gradient-to-br from-purple-200/25 to-pink-200/25 rounded-full blur-2xl animate-pulse delay-2000"></div>
+        
+        {/* Subtle Japanese Pattern Overlay */}
+        <div className="absolute inset-0 opacity-[0.02]" style={{
+          backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23000000' fill-opacity='1'%3E%3Ccircle cx='30' cy='30' r='2'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`
+        }}></div>
+      </div>
 
-      {isLoggedIn ? (
-        // --- Logged-in View ---
-        <> {/* Use Fragment to group Navbar and Main content */}
-          <Navbar
-            activeView={activeView}
-            setActiveView={setActiveView}
-            handleLogout={handleLogout}
+      {/* Main Content */}
+      <div className="relative z-10 min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50/30">
+        <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col items-center">
+          <Header />
+
+          {isLoggedIn ? (
+            // --- Logged-in View ---
+            <div className="w-full max-w-7xl">
+              <Navbar
+                activeView={activeView}
+                setActiveView={setActiveView}
+                handleLogout={handleLogout}
+              />
+              
+              <main className="mt-8">
+                {/* Conditionally render content based on activeView */}
+                {activeView === 'reader' && (
+                  <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-xl border border-white/20 p-8 transition-all duration-500 hover:shadow-2xl">
+                    {/* Text Input */}
+                    <TextInput
+                      inputText={inputText}
+                      setInputText={setInputText}
+                      handleProcessText={handleProcessText}
+                      isLoading={isLoading}
+                    />
+                    
+                    {/* Elegant Divider */}
+                    <div className="my-8 flex items-center">
+                      <div className="flex-1 h-px bg-gradient-to-r from-transparent via-slate-300 to-transparent"></div>
+                      <div className="px-4">
+                        <div className="w-2 h-2 bg-slate-400 rounded-full"></div>
+                      </div>
+                      <div className="flex-1 h-px bg-gradient-to-r from-transparent via-slate-300 to-transparent"></div>
+                    </div>
+                    
+                    {/* Output Display */}
+                    <OutputDisplay
+                      processedData={processedData}
+                      isLoading={isLoading}
+                      error={error}
+                      handleKanjiClick={handleKanjiClick}
+                    />
+                  </div>
+                )}
+
+                {activeView === 'srs' && (
+                  <div className="space-y-6">
+                    {/* Modern SRS Navigation */}
+                    <div className="flex justify-center">
+                      <div className="inline-flex bg-white/80 backdrop-blur-xl rounded-2xl p-2 shadow-lg border border-white/30">
+                        <button
+                          onClick={() => setSrsView('dashboard')}
+                          className={`px-6 py-3 rounded-xl text-sm font-medium transition-all duration-300 relative overflow-hidden group ${
+                            srsView === 'dashboard'
+                              ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-lg shadow-blue-500/25 transform scale-105'
+                              : 'text-slate-600 hover:text-slate-800 hover:bg-slate-50'
+                          }`}
+                        >
+                          <span className="relative z-10 flex items-center gap-2">
+                            📊 Dashboard
+                          </span>
+                          {srsView === 'dashboard' && (
+                            <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-indigo-700 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                          )}
+                        </button>
+                        
+                        <button
+                          onClick={() => setSrsView('review')}
+                          className={`px-6 py-3 rounded-xl text-sm font-medium transition-all duration-300 relative overflow-hidden group ${
+                            srsView === 'review'
+                              ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-500/25 transform scale-105'
+                              : 'text-slate-600 hover:text-slate-800 hover:bg-slate-50'
+                          }`}
+                        >
+                          <span className="relative z-10 flex items-center gap-2">
+                            🎯 Review
+                          </span>
+                          {srsView === 'review' && (
+                            <div className="absolute inset-0 bg-gradient-to-r from-emerald-600 to-teal-700 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                          )}
+                        </button>
+                        
+                        <button
+                          onClick={() => setSrsView('queue')}
+                          className={`px-6 py-3 rounded-xl text-sm font-medium transition-all duration-300 relative overflow-hidden group ${
+                            srsView === 'queue'
+                              ? 'bg-gradient-to-r from-purple-500 to-violet-600 text-white shadow-lg shadow-purple-500/25 transform scale-105'
+                              : 'text-slate-600 hover:text-slate-800 hover:bg-slate-50'
+                          }`}
+                        >
+                          <span className="relative z-10 flex items-center gap-2">
+                            📚 Manage
+                          </span>
+                          {srsView === 'queue' && (
+                            <div className="absolute inset-0 bg-gradient-to-r from-purple-600 to-violet-700 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* SRS Content with Smooth Transitions */}
+                    <div className="transition-all duration-500 ease-in-out">
+                      {srsView === 'dashboard' && (
+                        <div className="animate-in slide-in-from-bottom-4 duration-500">
+                          <SrsDashboard onNavigateToReview={() => setSrsView('review')} />
+                        </div>
+                      )}
+                      {srsView === 'review' && (
+                        <div className="animate-in slide-in-from-bottom-4 duration-500">
+                          <SrsReviewSession />
+                        </div>
+                      )}
+                      {srsView === 'queue' && (
+                        <div className="animate-in slide-in-from-bottom-4 duration-500">
+                          <SrsQueueManager />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </main>
+            </div>
+          ) : (
+            // --- Logged-out View ---
+            <div className="w-full max-w-md animate-in fade-in duration-700">
+              <AuthForms
+                showLogin={showLogin}
+                setShowLogin={setShowLogin}
+                handleLogin={handleLogin}
+                handleRegister={handleRegister}
+                authError={authError}
+                isLoading={isAuthLoading}
+                setAuthToken={setAuthToken}
+                setCurrentUser={setCurrentUser}
+                setAuthError={setAuthError}
+                setIsAuthLoading={setIsAuthLoading}
+              />
+            </div>
+          )}
+
+          {/* Modal */}
+          <KanjiDetailsModal
+            isOpen={isModalOpen}
+            onClose={handleCloseModal}
+            kanjiChar={selectedKanjiChar}
+            kanjiDetails={selectedKanjiDetails}
           />
-          <main className="w-full max-w-4xl bg-white/60 backdrop-blur-sm rounded-lg shadow-md p-6 border border-stone-300/30">
-            {/* Conditionally render content based on activeView */}
-            {activeView === 'reader' && (
-              <>
-                {/* Text Input */}
-                <TextInput
-                  inputText={inputText}
-                  setInputText={setInputText}
-                  handleProcessText={handleProcessText}
-                  isLoading={isLoading}
-                />
-                <hr className="my-6 border-t border-stone-300" />
-                {/* Output Display */}
-                <OutputDisplay
-                  processedData={processedData}
-                  isLoading={isLoading}
-                  error={error}
-                  handleKanjiClick={handleKanjiClick}
-                />
-              </>
-            )}
-
-            {activeView === 'srs' && (
-              <>
-                <h2 className="text-xl font-semibold mb-4 text-stone-700">SRS Review Session</h2>
-                {/* Render the SRS Tester for now, replace later with real component */}
-                <SrsReviewTester />
-                {/* <SrsReviewSession />  <-- Future component */}
-              </>
-            )}
-          </main>
-        </>
-      ) : (
-        // --- Logged-out View ---
-        <AuthForms
-          showLogin={showLogin}
-          setShowLogin={setShowLogin}
-          handleLogin={handleLogin}
-          handleRegister={handleRegister}
-          authError={authError}
-          isLoading={isAuthLoading}
-          setAuthToken={setAuthToken}
-          setCurrentUser={setCurrentUser}
-          setAuthError={setAuthError}
-          setIsAuthLoading={setIsAuthLoading}
-        />
-      )}
-
-      {/* Modal (Keep existing) */}
-      <KanjiDetailsModal
-        isOpen={isModalOpen}
-        onClose={handleCloseModal}
-        kanjiChar={selectedKanjiChar}
-        kanjiDetails={selectedKanjiDetails}
-      />
-       {/* Footer (Keep existing) */}
-       <footer className="mt-8 text-center text-stone-500 text-sm">
-         Created with React
-       </footer>
+          
+          {/* Modern Footer */}
+          <footer className="mt-16 text-center">
+            <div className="inline-flex items-center gap-2 px-4 py-2 bg-white/60 backdrop-blur-sm rounded-full border border-white/30 text-slate-500 text-sm">
+              <span>Made with</span>
+              <span className="text-red-400 animate-pulse">❤️</span>
+              <span>for Japanese learners</span>
+            </div>
+          </footer>
+        </div>
+      </div>
     </div>
   );
 }
